@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nashira3D - surfaces from formulas</title>
+<meta name="description" content="A library that draws three-dimensional surface plots straight from a formula, on the GPU, without opening a window.">
+<style>
+  /* ------------------------------------------------------------------
+     Paper and pens. Eight tones for the sheet, five for the pens, and no
+     more: a colour that is missing is usually a layout that is wrong.
+
+     Three theme states, in this order. Bare :root is the light sheet. The
+     media query, shielded by :not([data-theme="light"]), is the system dark.
+     [data-theme] is an explicit choice and has to win both ways. Defining a
+     colour only inside the media query would leave a page with no choice of
+     theme with no colour at all.
+     ------------------------------------------------------------------ */
+  :root{
+    --paper:#F0F1EC; --plate:#E9EBE4; --ink:#171A18; --ink-soft:#5B6259;
+    --rule:#D3D7CD; --grid:#DCE0D5;
+    --pen-blue:#2F5C9E; --pen-red:#B03A32; --pen-green:#2C6B52;
+    --pen-violet:#6B4A8F; --pen-amber:#B67A2C;
+    --accent:var(--pen-blue);
+
+    --serif:"Palatino Linotype",Palatino,"Book Antiqua","URW Palladio L",
+            Georgia,"Times New Roman",serif;
+    --mono:"Cascadia Mono",Consolas,"SF Mono","DejaVu Sans Mono",
+           ui-monospace,monospace;
+
+    /* The drawings are baked onto light paper. On a dark sheet an untouched
+       PNG is a white rectangle, which is exactly what a sheet at night must
+       not have. The drawings are grey, so the night version of a pencil
+       drawing is chalk on a blackboard: the picture is inverted, and nothing
+       else about it changes. Driven by a variable rather than by a media
+       query alone, so an explicit choice of theme moves it too. */
+    --art:none;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --paper:#0B0E0C; --plate:#0F1311; --ink:#DEE4DC; --ink-soft:#8B9489;
+      --rule:#1F2622; --grid:#171E19;
+      --pen-blue:#74A4EA; --pen-red:#E87C70; --pen-green:#63D5A3;
+      --pen-violet:#B490E2; --pen-amber:#E2A855;
+      --art:invert(1);
+    }
+  }
+  :root[data-theme="light"]{
+    --paper:#F0F1EC; --plate:#E9EBE4; --ink:#171A18; --ink-soft:#5B6259;
+    --rule:#D3D7CD; --grid:#DCE0D5;
+    --pen-blue:#2F5C9E; --pen-red:#B03A32; --pen-green:#2C6B52;
+    --pen-violet:#6B4A8F; --pen-amber:#B67A2C;
+    --art:none;
+  }
+  :root[data-theme="dark"]{
+    --paper:#0B0E0C; --plate:#0F1311; --ink:#DEE4DC; --ink-soft:#8B9489;
+    --rule:#1F2622; --grid:#171E19;
+    --pen-blue:#74A4EA; --pen-red:#E87C70; --pen-green:#63D5A3;
+    --pen-violet:#B490E2; --pen-amber:#E2A855;
+    --art:invert(1);
+  }
+
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font:400 1.0625rem/1.72 var(--serif);
+    font-variant-numeric:oldstyle-nums;
+    -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility;
+  }
+
+  /* Justified with hyphens, on ALL prose in any block - that is half of the
+     bookish look. A ragged right edge reads as a landing page at once. */
+  p,.lead,.head p,.pair p,.foot p,.note{
+    text-align:justify; hyphens:auto; -webkit-hyphens:auto;
+  }
+  /* Numbers and short labels are not justified: a figure does not stretch,
+     and a small label in justify falls apart. */
+  .row span,.k,.dots,figcaption{text-align:left; hyphens:manual}
+
+  .sheet{max-width:74rem; margin:0 auto; padding:0 clamp(1.25rem,4vw,3.5rem)}
+
+  /* ONE column split for the whole document, hero included. The hero stands
+     first, directly above the first section, and its right column is what
+     sets the vertical the eye reads everything below by. Half and half is
+     duller than an asymmetry and guarantees the verticals cannot drift. */
+  .hero,.head,.pair,.foot,.two{
+    display:grid; grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:0 clamp(2rem,5vw,4.5rem);
+  }
+
+  /* --- top bar ---------------------------------------------------------- */
+  .bar{
+    display:flex; flex-wrap:wrap; align-items:baseline; gap:.6rem 1.6rem;
+    padding:1.6rem 0 1.1rem; border-bottom:1px solid var(--rule);
+  }
+  .bar .name{font-size:1.15rem}
+  .bar .name em{font-style:italic; color:var(--ink-soft)}
+  .bar nav{display:flex; flex-wrap:wrap; gap:.4rem 1.35rem; margin-left:auto}
+  .bar a{
+    color:var(--ink-soft); text-decoration:none; font-family:var(--mono);
+    font-size:.72rem; letter-spacing:.14em; text-transform:uppercase;
+    border-bottom:1px solid transparent; transition:.18s;
+  }
+  .bar a:hover{color:var(--accent); border-bottom-color:var(--rule)}
+
+  /* --- hero ------------------------------------------------------------- */
+  .hero{padding:clamp(2.5rem,6vw,4.5rem) 0 clamp(2rem,4vw,3rem); align-items:center}
+  .kicker{
+    font-family:var(--mono); font-size:.72rem; letter-spacing:.18em;
+    text-transform:uppercase; color:var(--ink-soft); margin:0 0 1.1rem;
+  }
+  h1{
+    font-weight:400; margin:0 0 1.1rem;
+    font-size:clamp(2.4rem,1.1rem + 4.2vw,4.25rem);
+    line-height:1.03; letter-spacing:-.021em; text-wrap:balance;
+  }
+  h1 em{font-style:italic; color:var(--accent)}
+  .lead{font-size:1.18rem; line-height:1.62; margin:0}
+
+  /* --- plate with corner ticks, as a field on a drawing ----------------- */
+  .plate{position:relative; background:var(--plate); padding:.75rem}
+  .plate::before,.plate::after{
+    content:""; position:absolute; width:.75rem; height:.75rem;
+    border:1px solid var(--rule);
+  }
+  .plate::before{top:-1px; left:-1px; border-right:0; border-bottom:0}
+  .plate::after{bottom:-1px; right:-1px; border-left:0; border-top:0}
+  .plate img{display:block; width:100%; height:auto; filter:var(--art)}
+  figure{margin:0}
+  figcaption{
+    font-family:var(--mono); font-size:.72rem; letter-spacing:.04em;
+    color:var(--ink-soft); margin-top:.6rem;
+  }
+
+  /* --- sections --------------------------------------------------------- */
+  section{padding:clamp(2.5rem,5vw,4rem) 0; border-top:1px solid var(--rule)}
+  h2{
+    font-weight:400; font-size:clamp(1.6rem,1rem + 1.6vw,2.3rem);
+    line-height:1.1; letter-spacing:-.014em; margin:0;
+    max-width:15ch; text-wrap:balance;
+  }
+  .head{margin-bottom:clamp(1.5rem,3vw,2.4rem)}
+  .head p{margin:0}
+  h3{
+    font-weight:400; font-size:1.02rem; margin:0 0 .35rem;
+    font-family:var(--mono); letter-spacing:.02em;
+  }
+
+  /* --- rows with dotted leaders, as in a table of contents --------------- */
+  .rows{margin:0}
+  .rows > .row{
+    display:flex; align-items:baseline; gap:.5rem;
+    border-top:1px solid var(--rule); padding:.8rem 0;
+  }
+  .rows > .row:last-child{border-bottom:1px solid var(--rule)}
+  .row .k{flex:0 0 auto}
+  .row .dots{flex:1 1 auto; border-bottom:1px dotted var(--rule);
+    transform:translateY(-.28em)}
+  .row .v{flex:0 0 auto; font-family:var(--mono); font-size:.86rem;
+    font-variant-numeric:lining-nums tabular-nums; color:var(--ink-soft)}
+
+  /* --- code ------------------------------------------------------------- */
+  pre{
+    margin:0; background:var(--plate); border-left:2px solid var(--accent);
+    padding:1rem 1.15rem; overflow-x:auto;
+    font:400 .84rem/1.62 var(--mono);
+    font-variant-numeric:lining-nums tabular-nums;
+  }
+  pre .kw{color:var(--accent)}
+  pre .st{color:var(--pen-green)}
+  pre .cm{color:var(--ink-soft)}
+  code{font-family:var(--mono); font-size:.9em}
+
+  /* --- gallery ---------------------------------------------------------- */
+  .gal{display:grid; grid-template-columns:repeat(3,minmax(0,1fr));
+    gap:clamp(1.25rem,3vw,2rem)}
+  .gal figcaption b{font-weight:400; color:var(--ink)}
+
+  .note{color:var(--ink-soft); font-size:.95rem}
+  .stack > * + *{margin-top:1.1rem}
+  a.link{color:var(--accent); text-decoration:none;
+    border-bottom:1px solid var(--rule)}
+  a.link:hover{border-bottom-color:var(--accent)}
+
+  .foot{
+    border-top:1px solid var(--rule);
+    padding:clamp(2rem,4vw,3rem) 0 clamp(2.5rem,5vw,3.5rem);
+    color:var(--ink-soft); font-size:.92rem;
+  }
+  .foot p{margin:0}
+
+  /* ONE breakpoint. Everything with more than one column becomes one. */
+  @media (max-width:900px){
+    .hero,.head,.pair,.foot,.two{grid-template-columns:minmax(0,1fr)}
+    .hero > * + *,.head > * + *,.pair > * + *,.two > * + *{margin-top:1.6rem}
+    .gal{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .bar nav{margin-left:0}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{transition:none !important}
+  }
+</style>
+
+<div class="sheet">
+
+  <header class="bar">
+    <div class="name">Nashira3D <em>for Pascal and Python</em></div>
+    <nav>
+      <a href="#idea">Idea</a>
+      <a href="#use">Use</a>
+      <a href="#gallery">Gallery</a>
+      <a href="#inside">Inside</a>
+      <a href="#numbers">Numbers</a>
+      <a href="#limits">Limits</a>
+      <a class="link" href="https://github.com/pisarev/nashira3d">Source</a>
+    </nav>
+  </header>
+
+  <section class="hero" style="border-top:0">
+    <div>
+      <p class="kicker">Free Pascal &middot; Windows &amp; Linux &middot; MIT</p>
+      <h1>Give it a formula.<br>Get a <em>surface</em>.</h1>
+      <p class="lead">A plotting library that takes the function itself, not a
+      grid of numbers you sampled from it beforehand. It builds the mesh, draws
+      it on the graphics card, and hands back the pixels. No window is opened
+      and no figure is created.</p>
+    </div>
+    <figure>
+      <div class="plate">
+        <img src="assets/hero.png" width="991" height="552"
+             alt="A surface of sin(3x) cos(3y) with a decaying envelope, drawn as contour lines over a mesh.">
+      </div>
+      <figcaption>sin(3*x)*cos(3*y)*exp(-(x*x+y*y)) &middot; drawn by the library
+      itself, not traced by hand</figcaption>
+    </figure>
+  </section>
+
+  <section id="idea">
+    <div class="head">
+      <div><h2>The function, not its samples</h2></div>
+      <div><p>Plotting libraries are handed an array. This one is handed the
+      expression, and keeps it. That difference is not cosmetic: everything a
+      renderer could do well needs the function to still be there when the
+      drawing starts.</p></div>
+    </div>
+
+    <div class="two">
+      <div class="stack">
+        <p>Given the function rather than its samples, a renderer can place a
+        vertex exactly on a peak instead of near one, sample more finely where
+        the surface actually bends, and evaluate again when you zoom instead of
+        stretching a mesh that was fixed long ago. Throw the function away and
+        none of that is possible any more, however good the renderer.</p>
+        <p>Version 0.2 does none of it yet. It samples a uniform grid, like
+        everyone else. What it does already is keep the door open: the interface
+        speaks of <code>quality</code> rather than of a grid size, so the
+        sampling can grow up without a single line changing on the calling
+        side.</p>
+      </div>
+      <div class="stack">
+        <p>The formula is read by a Pascal parser and compiled to machine code
+        before a single point is evaluated, so a grid of a quarter of a million
+        points is not a quarter of a million interpreted expressions.</p>
+        <pre><span class="cm">// the parser is a separate library, taken at a tag</span>
+<span class="kw">uses</span> Parser, ParseJit.Parser, nsh_surface;</pre>
+        <p class="note">The parser is <a class="link"
+        href="https://github.com/pisarev/pascal-mathparser">pascal-mathparser</a>,
+        the same one that reads formulas for the plotting components. Nashira3D
+        clones it at a tag rather than carrying a copy.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="use">
+    <div class="head">
+      <div><h2>The whole program</h2></div>
+      <div><p>Install the wheel, write the formula, ask for a picture. There is
+      no figure to create, no backend to choose, no event loop, and nothing to
+      close.</p></div>
+    </div>
+
+    <div class="two">
+      <div class="stack">
+        <pre><span class="kw">import</span> nashira3d
+
+<span class="kw">with</span> nashira3d.Session(<span class="st">"sin(3*x) * cos(3*y)"</span>,
+                       domain=(-2, 2, -2, 2)) <span class="kw">as</span> s:
+    s.save_png(<span class="st">"wave.png"</span>, 800, 600)</pre>
+        <p>That is the program. It writes an 800 by 600 picture and exits. A
+        frame comes back as a numpy array when you want the pixels rather than
+        a file, and the same session redraws as fast as you can change the
+        camera.</p>
+      </div>
+      <div class="stack">
+        <p>The binding uses cffi in ABI mode, which means it reads the shared
+        library at run time and needs no compiler on your machine. The wheel
+        carries the binary for your platform and nothing else.</p>
+        <pre>pip install nashira3d-0.2.0-py3-none-win_amd64.whl</pre>
+        <p class="note">Wheels are built from the sources in the repository.
+        There is no package on PyPI yet.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="gallery">
+    <div class="head">
+      <div><h2>What it draws</h2></div>
+      <div><p>Every picture on this page came out of the library through the
+      same call any program would make. They are regenerated by a script, so
+      they cannot drift away from what the code actually does.</p></div>
+    </div>
+
+    <div class="gal">
+      <figure>
+        <div class="plate"><img src="assets/saddle.png" width="676" height="433"
+          alt="A saddle surface, x squared minus y squared, in contour lines."></div>
+        <figcaption><b>saddle</b><br>x*x - y*y</figcaption>
+      </figure>
+      <figure>
+        <div class="plate"><img src="assets/ripple.png" width="651" height="448"
+          alt="Concentric ripples decaying away from the centre."></div>
+        <figcaption><b>ripple</b><br>sin(5*sqrt(x**2+y**2))/(1+2*(x**2+y**2))</figcaption>
+      </figure>
+      <figure>
+        <div class="plate"><img src="assets/peak.png" width="655" height="420"
+          alt="A single narrow peak on a flat plane."></div>
+        <figcaption><b>peak</b><br>exp(-40*((x-0.137)**2 + y*y))</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="inside">
+    <div class="head">
+      <div><h2>What is inside</h2></div>
+      <div><p>Four parts, each doing one thing. The seam between them is a flat
+      C table, so a caller in any language sees the same library.</p></div>
+    </div>
+
+    <div class="rows">
+      <div class="row"><span class="k">Core, Free Pascal</span>
+        <span class="dots"></span>
+        <span class="v">mesh, camera, shaders, EGL</span></div>
+      <div class="row"><span class="k">Seam</span>
+        <span class="dots"></span>
+        <span class="v">nsh_get_api, a flat C table</span></div>
+      <div class="row"><span class="k">Python package</span>
+        <span class="dots"></span>
+        <span class="v">cffi in ABI mode, no compiler</span></div>
+      <div class="row"><span class="k">Browser viewer</span>
+        <span class="dots"></span>
+        <span class="v">computes nothing of its own</span></div>
+    </div>
+
+    <div class="two" style="margin-top:clamp(1.5rem,3vw,2.4rem)">
+      <div class="stack">
+        <h3>The seam is written down</h3>
+        <p>The order of the members of the C table is part of the contract, and
+        it is recorded in a file of its own beside the header. Anything new is
+        appended at the end; an insertion in the middle shifts everything below
+        it, and a build made elsewhere starts calling the neighbouring function
+        in silence. That happened once, which is why the file exists.</p>
+      </div>
+      <div class="stack">
+        <h3>The viewer parses nothing</h3>
+        <p>The page in the repository sends a formula and a camera to a small
+        bridge and gets back the bytes the core drew. It carried a fallback
+        parser in JavaScript once. That parser agreed with the library on simple
+        formulas and disagreed on nine of thirty-one probes, so it was removed:
+        a second opinion that is quietly wrong is worse than no picture.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="numbers">
+    <div class="head">
+      <div><h2>Measured, not claimed</h2></div>
+      <div><p>Numbers from the release of this version. Each was produced by a
+      run, not written down from memory.</p></div>
+    </div>
+
+    <div class="rows">
+      <div class="row"><span class="k">Checks in the battery</span>
+        <span class="dots"></span><span class="v">346, no failures</span></div>
+      <div class="row"><span class="k">Same count on Windows and Linux</span>
+        <span class="dots"></span><span class="v">346 and 346</span></div>
+      <div class="row"><span class="k">Formula compiled per surface</span>
+        <span class="dots"></span><span class="v">once, not once per row</span></div>
+      <div class="row"><span class="k">Full frame, quality 100, 320 by 240</span>
+        <span class="dots"></span><span class="v">12 to 30 ms</span></div>
+      <div class="row"><span class="k">Grid at quality 100</span>
+        <span class="dots"></span><span class="v">256 by 256 nodes</span></div>
+    </div>
+  </section>
+
+  <section id="limits">
+    <div class="head">
+      <div><h2>What it does not do</h2></div>
+      <div><p>Stated here rather than discovered later. Every line is a real
+      boundary of version 0.2, not a plan.</p></div>
+    </div>
+
+    <div class="two">
+      <div class="stack">
+        <p><b>One surface at a time.</b> A session draws one function. Several
+        surfaces in one picture, and the depth sorting that goes with them, are
+        not there.</p>
+        <p><b>A uniform grid.</b> Sampling does not follow the curvature yet, so
+        a narrow peak between two nodes is missed exactly as it would be
+        anywhere else.</p>
+      </div>
+      <div class="stack">
+        <p><b>One thread.</b> Every call has to come from the thread that drew
+        the first frame. An OpenGL context belongs to the thread that created
+        it, and on any other thread the card refuses in silence.</p>
+        <p><b>A graphics card is required.</b> The core renders through EGL. On
+        a machine with no working EGL it refuses out loud rather than drawing
+        something else.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <div>
+      <p>Nashira3D is named after &gamma; Capricorni, the star the IAU lists as
+      Nashira. The name is old and means the bringer of good tidings.</p>
+    </div>
+    <div>
+      <p>MIT licence. Source, issues, and releases at <a class="link"
+      href="https://github.com/pisarev/nashira3d">github.com/pisarev/nashira3d</a>.
+      The parser lives at <a class="link"
+      href="https://github.com/pisarev/pascal-mathparser">pascal-mathparser</a>.</p>
+    </div>
+  </footer>
+
+</div>
+</html>
