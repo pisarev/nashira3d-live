@@ -1,0 +1,3 @@
+# Build output of the demo engine. The finished module goes to demo/ and is
+# committed; the units and objects behind it are not.
+engine/out/

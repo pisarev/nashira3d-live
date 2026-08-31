@@ -200,6 +200,35 @@
   @media (prefers-reduced-motion:reduce){
     *{transition:none !important}
   }
+  /* ------------------------------------------------------------------
+     The live demo. Same pens, same rules: a frame of one hairline, no
+     rounding, no shadow. The canvas sits in a .plate like the drawings do,
+     and it is NOT inverted at night - it is drawn live, in the theme's own
+     colours, unlike the baked PNGs above.
+     ------------------------------------------------------------------ */
+  #dmC{display:block; width:100%; height:auto; background:var(--plate)}
+  .veil{
+    position:absolute; inset:.75rem; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:.6rem;
+    background:var(--plate); text-align:center; padding:1rem;
+  }
+  .veil p{max-width:26em}
+  .dmrow{display:flex; gap:.5rem; align-items:stretch}
+  .dmrow input{
+    flex:1 1 auto; min-width:0; font:inherit; font-family:var(--mono);
+    font-size:.95rem; color:var(--ink); background:var(--plate);
+    border:1px solid var(--rule); padding:.45rem .6rem;
+  }
+  .dmrow input:focus{outline:none; border-color:var(--accent)}
+  button{
+    font:inherit; font-size:.95rem; color:var(--ink); background:var(--plate);
+    border:1px solid var(--rule); padding:.45rem .9rem; cursor:pointer;
+  }
+  button:hover{border-color:var(--accent); color:var(--accent)}
+  button[disabled]{cursor:default; color:var(--ink-soft); border-color:var(--rule)}
+  .pres{display:flex; flex-wrap:wrap; gap:.4rem}
+  .pres button{font-family:var(--mono); font-size:.85rem; padding:.3rem .55rem}
+  .frag{font-family:var(--mono); font-size:.9em}
 </style>
 
 <div class="sheet">
@@ -209,6 +238,7 @@
     <nav>
       <a href="#idea">Idea</a>
       <a href="#use">Use</a>
+      <a href="#demo">Live</a>
       <a href="#gallery">Gallery</a>
       <a href="#inside">Inside</a>
       <a href="#numbers">Numbers</a>
@@ -296,13 +326,76 @@
         <p>The binding uses cffi in ABI mode, which means it reads the shared
         library at run time and needs no compiler on your machine. A wheel
         carries the binary for one platform and nothing else.</p>
-        <p><b>There is no wheel to download yet</b>, and nothing on PyPI.
-        Building one is a single command once the core is built:</p>
+        <p>Wheels for Windows and Linux are attached to every entry on the
+        <a class="link" href="https://github.com/pisarev/nashira3d/releases">releases
+        page</a>. Nothing is on PyPI yet. Building one yourself is a single
+        command once the core is built:</p>
         <pre>python build_wheel.py</pre>
         <p class="note">It puts the library inside the package, builds a wheel
-        tagged for your platform, and takes the copy back out. Installed into
-        an empty environment, without numpy and without the sources, that wheel
-        passes its own acceptance probe with no failures.</p>
+        tagged for your platform, and takes the copy back out. Installed into an
+        empty environment, without numpy and without the sources, that wheel
+        passes its own acceptance probe with no failures. The Linux wheel is
+        tagged <code>linux_x86_64</code> rather than <code>manylinux</code>: it
+        needs a C library no older than the machine it was built on.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="demo">
+    <div class="head">
+      <div><h2>Type a formula. Turn it with the mouse.</h2></div>
+      <div>
+        <p>The mesh below is not a picture of the library. It <em>is</em> the
+        library: the same <code class="frag">nsh_surface</code> that ships in the
+        release, compiled to WebAssembly, reading your formula with the same
+        parser. Vertices, normals, the span of the height, the number of cells the
+        function left undefined - all of it comes back from that code.</p>
+      </div>
+    </div>
+
+    <div class="two">
+      <div class="stack">
+        <div class="plate">
+          <canvas id="dmC" width="880" height="620" aria-label="the surface"></canvas>
+          <div id="dmVeil" class="veil">
+            <button id="dmBoot" type="button">Load the engine (4.2 MB)</button>
+            <p class="note" id="dmWhy">The whole parser and mesh builder,
+            compiled once. Nothing is fetched after that.</p>
+          </div>
+        </div>
+        <p class="note" id="dmStat">&nbsp;</p>
+      </div>
+
+      <div class="stack">
+        <div class="dmrow">
+          <input id="dmF" type="text" spellcheck="false"
+                 value="sin(3*x)*cos(3*y)*exp(-(x*x+y*y))"
+                 aria-label="the formula">
+          <button id="dmGo" type="button">draw</button>
+        </div>
+        <div class="pres" id="dmPres">
+          <button type="button">sin(3*x)*cos(3*y)*exp(-(x*x+y*y))</button>
+          <button type="button">x*x - y*y</button>
+          <button type="button">sin(sqrt(x*x+y*y)*4)/(1+x*x+y*y)</button>
+          <button type="button">arctan(x*y)*2</button>
+          <button type="button">exp(-(x*x+y*y))*cos(6*x)</button>
+        </div>
+
+        <p><b>Where the line is drawn.</b> The geometry is real. The drawing
+        is not: on a desktop the core renders through EGL on the graphics card
+        without opening a window, while here the browser draws with WebGL2 - the
+        same shader, carried over from GLSL 330 to GLSL ES 300.</p>
+
+        <p><b>And one thing is genuinely missing.</b> The desktop library
+        compiles a formula to machine code and evaluates a whole row of the mesh
+        in one call. WebAssembly has no executable memory at all, so that cannot
+        be there; the same parser runs as an interpreter instead, a point at a
+        time. It is the reason a heavy formula takes tenths of a second here and
+        milliseconds there.</p>
+
+        <p class="note">Drag to turn. The domain is fixed at
+        <span class="frag">-2..2</span> on both axes, and the quality is the
+        library's own default.</p>
       </div>
     </div>
   </section>
@@ -391,7 +484,7 @@
       <div class="row"><span class="k">Formula compiled per surface</span>
         <span class="dots"></span><span class="v">once, not once per row</span></div>
       <div class="row"><span class="k">Full frame, quality 100, 320 by 240</span>
-        <span class="dots"></span><span class="v">12 to 30 ms</span></div>
+        <span class="dots"></span><span class="v">12 to 25 ms</span></div>
       <div class="row"><span class="k">Grid at quality 100</span>
         <span class="dots"></span><span class="v">256 by 256 nodes</span></div>
     </div>
@@ -438,4 +531,367 @@
   </footer>
 
 </div>
+<script>
+/* ---------------------------------------------------------------------
+   The live demo.
+
+   What runs where. The formula, the mesh, the normals and the span of the
+   height come from nshwasm.wasm - that is core/nsh_surface.pas and the real
+   parser, compiled for WebAssembly. Everything below this line is the part
+   the page is honest about owning: the camera, the buffers and the draw.
+
+   The shader is carried over from the library almost word for word - the
+   ramp, the lighting and the contour lines are the same code, moved from
+   GLSL 330 to GLSL ES 300.
+   --------------------------------------------------------------------- */
+(() => {
+  const $ = id => document.getElementById(id);
+  const cv = $("dmC"), stat = $("dmStat");
+  let gl = null, eng = null, mem = null, prog = null, vao = null;
+  let vbo = null, ebo = null, idxCount = 0, info = [0, 0, 0, 0];
+  let az = 0.9, el = 0.45, dragging = false, lastX = 0, lastY = 0;
+
+  /* A minimal WASI shim: no files, only a clock and random bytes. The module
+     is a reactor - it has _initialize and never exits - so nothing here has
+     to pretend a process is running. */
+  const OK = 0, BADF = 8, NOSUP = 58;
+  const view = () => new DataView(mem.buffer);
+  const zero2 = (a, b) => { const v = view(); v.setUint32(a, 0, true); v.setUint32(b, 0, true); return OK; };
+  const wasi = {
+    args_get: () => OK, args_sizes_get: zero2,
+    environ_get: () => OK, environ_sizes_get: zero2,
+    clock_time_get: (i, p, o) => { view().setBigUint64(o, BigInt(Math.round(performance.now() * 1e6)), true); return OK; },
+    fd_close: () => BADF, fd_fdstat_get: () => BADF, fd_filestat_get: () => BADF,
+    fd_filestat_set_size: () => BADF, fd_filestat_set_times: () => BADF,
+    fd_prestat_get: () => BADF, fd_prestat_dir_name: () => BADF,
+    fd_read: () => BADF, fd_readdir: () => BADF, fd_seek: () => BADF, fd_tell: () => BADF,
+    fd_write: (f, i, n, w) => { view().setUint32(w, 0, true); return OK; },
+    path_create_directory: () => NOSUP, path_filestat_get: () => NOSUP,
+    path_filestat_set_times: () => NOSUP, path_open: () => NOSUP,
+    path_readlink: () => NOSUP, path_remove_directory: () => NOSUP,
+    path_rename: () => NOSUP, path_unlink_file: () => NOSUP,
+    poll_oneoff: () => NOSUP,
+    proc_exit: c => { throw new Error("the engine exited with " + c); },
+    random_get: (p, n) => { crypto.getRandomValues(new Uint8Array(mem.buffer, p, n)); return OK; }
+  };
+
+  const VS = `#version 300 es
+    layout(location = 0) in vec3 aPos;
+    layout(location = 1) in vec3 aNrm;
+    uniform mat4 uMVP;
+    uniform vec3 uScale;
+    uniform vec3 uNrmScale;
+    out vec3 vNrm;
+    out vec3 vPos;
+    out float vH;
+    void main() {
+      gl_Position = uMVP * vec4(aPos, 1.0);
+      vNrm = normalize(aNrm * uNrmScale);
+      vPos = aPos * uScale;
+      vH = aPos.z;
+    }`;
+
+  const FS = `#version 300 es
+    precision highp float;
+    in vec3 vNrm;
+    in vec3 vPos;
+    in float vH;
+    uniform vec3 uLight;
+    uniform vec3 uEye;
+    uniform int uShade;
+    uniform vec3 uCont;
+    out vec4 fColor;
+    vec3 ramp(float t) {
+      vec3 a = vec3(0.13, 0.18, 0.52);
+      vec3 b = vec3(0.10, 0.68, 0.56);
+      vec3 c = vec3(0.98, 0.86, 0.30);
+      return t < 0.5 ? mix(a, b, smoothstep(0.0, 1.0, t * 2.0))
+                     : mix(b, c, smoothstep(0.0, 1.0, (t - 0.5) * 2.0));
+    }
+    float contNum(float t) { return (uCont.x + t * uCont.y) / uCont.z; }
+    vec3 contInk(vec3 base, float f, float fw) {
+      float d  = abs(fract(f + 0.5) - 0.5) / max(fw, 1E-6);
+      float mn = 1.0 - smoothstep(0.30, 0.95, d);
+      float d5 = abs(fract(f * 0.2 + 0.5) - 0.5) * 5.0 / max(fw, 1E-6);
+      float mj = 1.0 - smoothstep(0.45, 1.25, d5);
+      float vis = (1.0 - smoothstep(0.40, 1.10, fw)) * smoothstep(0.004, 0.02, fw);
+      float a = clamp(mn * 0.55 + mj * 0.45, 0.0, 1.0) * vis;
+      return mix(base, vec3(0.07, 0.11, 0.17), a);
+    }
+    void main() {
+      vec3 n = normalize(vNrm);
+      vec3 l = normalize(uLight);
+      vec3 v = normalize(uEye - vPos);
+      if (dot(n, v) < 0.0) { n = -n; l.z = -l.z; }
+      vec3 h = normalize(l + v);
+      float d = max(dot(n, l), 0.0);
+      float w = d * 0.75 + 0.25;
+      float sp = pow(max(dot(n, h), 0.0), 42.0);
+      float rim = pow(1.0 - max(dot(n, v), 0.0), 3.0);
+      vec3 base = (uShade == 0) ? vec3(0.80, 0.83, 0.86)
+                                : ramp(clamp((vH + 1.0) * 0.5, 0.0, 1.0));
+      float spk = (uShade == 0) ? 0.13 : 0.30;
+      vec3 col = base * (0.20 + 0.80 * w);
+      col += vec3(0.95, 0.98, 1.00) * sp * spk;
+      col += vec3(0.35, 0.62, 0.80) * rim * 0.16;
+      if (uShade != 1) {
+        float f = contNum(vH);
+        col = contInk(col, f, fwidth(f));
+      }
+      fColor = vec4(col, 1.0);
+    }`;
+
+  const compile = (type, src) => {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src.trim());
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+      throw new Error(gl.getShaderInfoLog(s));
+    return s;
+  };
+
+  /* Matrices, written out rather than pulled from a library: four functions
+     are cheaper than a dependency, and the page loads nothing from anywhere
+     else. Column-major, as OpenGL wants. */
+  const mul = (a, b) => {
+    const o = new Float32Array(16);
+    for (let c = 0; c < 4; c++)
+      for (let r = 0; r < 4; r++) {
+        let s = 0;
+        for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k];
+        o[c * 4 + r] = s;
+      }
+    return o;
+  };
+  const perspective = (fovy, aspect, near, far) => {
+    const f = 1 / Math.tan(fovy / 2), o = new Float32Array(16);
+    o[0] = f / aspect; o[5] = f; o[10] = (far + near) / (near - far);
+    o[11] = -1; o[14] = 2 * far * near / (near - far);
+    return o;
+  };
+  const lookAt = (e, c, up) => {
+    const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    const norm = a => { const L = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / L, a[1] / L, a[2] / L]; };
+    const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const f = norm(sub(c, e)), s = norm(cross(f, up)), u = cross(s, f);
+    const o = new Float32Array(16);
+    o[0] = s[0]; o[4] = s[1]; o[8] = s[2];
+    o[1] = u[0]; o[5] = u[1]; o[9] = u[2];
+    o[2] = -f[0]; o[6] = -f[1]; o[10] = -f[2];
+    o[12] = -dot(s, e); o[13] = -dot(u, e); o[14] = dot(f, e); o[15] = 1;
+    return o;
+  };
+
+  const BOX = [1, 1, 0.3];          // the library's own default proportions
+  // The distance is chosen so that the sheet takes up about half the frame.
+  // In the library set_fill does that job, but fitting the frame belongs to
+  // the drawing side, and here the drawing side is the browser.
+  const DIST = 2.4;
+  const HALF = 2.0;                 // the domain is -2..2, so the half is 2
+  const QUALITY = 50;               // the library's own default
+
+  const draw = () => {
+    if (!gl || !idxCount) return;
+    const w = cv.width, h = cv.height;
+    gl.viewport(0, 0, w, h);
+    const paper = getComputedStyle(document.documentElement)
+                    .getPropertyValue("--plate").trim() || "#E9EBE4";
+    const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(paper);
+    if (m) gl.clearColor(parseInt(m[1], 16) / 255, parseInt(m[2], 16) / 255,
+                         parseInt(m[3], 16) / 255, 1);
+    else gl.clearColor(0.91, 0.92, 0.89, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+
+    const ce = Math.cos(el), se = Math.sin(el);
+    const eye = [DIST * ce * Math.cos(az), DIST * ce * Math.sin(az), DIST * se];
+    const mvp = mul(perspective(0.9, w / h, 0.05, 40),
+                    lookAt(eye, [0, 0, 0], [0, 0, 1]));
+    gl.useProgram(prog);
+    const U = n => gl.getUniformLocation(prog, n);
+    gl.uniformMatrix4fv(U("uMVP"), false, mvp);
+    gl.uniform3f(U("uScale"), BOX[0], BOX[1], BOX[2]);
+    const zspan = Math.max(info[1] - info[0], 1e-9);
+    gl.uniform3f(U("uNrmScale"), HALF / BOX[0], HALF / BOX[1], zspan / (2 * BOX[2]));
+    gl.uniform3f(U("uLight"), Math.cos(2.2) * Math.cos(0.9),
+                 Math.sin(2.2) * Math.cos(0.9), Math.sin(0.9));
+    gl.uniform3f(U("uEye"), eye[0], eye[1], eye[2]);
+    gl.uniform1i(U("uShade"), 2);
+    // The step of the contour lines: the same 1-2-5 rule the library uses.
+    const raw = zspan / 14;
+    const p10 = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1e-12))));
+    const step = [1, 2, 5, 10].reduce((b, k) =>
+      Math.abs(Math.log(k * p10 / raw)) < Math.abs(Math.log(b / raw)) ? k * p10 : b, p10);
+    gl.uniform3f(U("uCont"), (info[0] + info[1]) / 2, zspan / 2, step);
+    gl.bindVertexArray(vao);
+    gl.drawElements(gl.TRIANGLES, idxCount, gl.UNSIGNED_INT, 0);
+  };
+
+  const note = () => {
+    const p = eng.walloc(256), n = eng.note(p, 256);
+    const s = new TextDecoder().decode(new Uint8Array(mem.buffer.slice(p, p + n)));
+    eng.wfree(p);
+    return s;
+  };
+
+  const build = text => {
+    const b = new TextEncoder().encode(text);
+    const p = eng.walloc(b.length);
+    new Uint8Array(mem.buffer, p, b.length).set(b);
+    const t0 = performance.now();
+    const cnt = eng.build(p, b.length, -HALF, HALF, -HALF, HALF, QUALITY);
+    const ms = performance.now() - t0;
+    eng.wfree(p);
+    if (cnt < 0) { stat.textContent = "the engine refused: " + note(); return; }
+
+    const vb = eng.walloc(cnt * 6 * 4);
+    const got = eng.verts(vb, cnt * 6);
+    // The buffer is copied out at once: any later call may grow the memory of
+    // the module, and a view onto the old one is detached without warning.
+    const raw = new Float32Array(mem.buffer.slice(vb, vb + got * 4));
+    eng.wfree(vb);
+
+    const ib = eng.walloc(cnt * 8 * 4);
+    const ic = eng.idx(ib, cnt * 8);
+    const idx = new Uint32Array(mem.buffer.slice(ib, ib + ic * 4));
+    eng.wfree(ib);
+
+    const inf = eng.walloc(32);
+    eng.info(inf);
+    info = Array.from(new Float64Array(mem.buffer.slice(inf, inf + 32)));
+    eng.wfree(inf);
+
+    /* Bringing the mesh to the unit box - this is the drawing side, and the
+       library does the same thing before it hands vertices to the card: x and
+       y are divided by the larger half of the domain, z by the half-span of
+       the height. */
+    const zmid = (info[0] + info[1]) / 2, zh = Math.max((info[1] - info[0]) / 2, 1e-9);
+    const v = new Float32Array(raw.length);
+    for (let i = 0; i < raw.length; i += 6) {
+      v[i] = raw[i] / HALF;
+      v[i + 1] = raw[i + 1] / HALF;
+      v[i + 2] = (raw[i + 2] - zmid) / zh;
+      v[i + 3] = raw[i + 3]; v[i + 4] = raw[i + 4]; v[i + 5] = raw[i + 5];
+    }
+
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, v, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+    idxCount = ic;
+
+    stat.textContent = cnt.toLocaleString("en") + " vertices, " +
+      (ic / 3).toLocaleString("en") + " triangles, " + info[2] + " nodes a side, " +
+      (info[3] ? info[3] + " cells the function left undefined" : "no undefined cells") +
+      " - built in " + Math.round(ms) + " ms";
+    draw();
+  };
+
+  /* Fetched whole and then instantiated, rather than streamed.
+     instantiateStreaming is the shorter way and the more fragile one: it
+     insists on a Content-Type of application/wasm and it goes wrong behind a
+     proxy that buffers the body. Four megabytes fit in memory without a
+     thought, so the sturdy path is the right one here.
+
+     The wait is bounded and the reason is said. A page that hangs on
+     "loading..." with nothing else to show is the worst of the three possible
+     endings: worse than a refusal, because a refusal at least names itself. */
+  const loadEngine = async url => {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 30000);
+    try {
+      const r = await fetch(url, { signal: ctl.signal, cache: "no-store" });
+      if (!r.ok) throw new Error("the server answered " + r.status + " for " + url);
+      const buf = await r.arrayBuffer();
+      if (buf.byteLength < 1024 * 1024)
+        throw new Error("the module came back as " + buf.byteLength +
+                        " bytes, which is not the engine");
+      return WebAssembly.instantiate(buf, { wasi_snapshot_preview1: wasi });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  $("dmBoot").onclick = async () => {
+    const b = $("dmBoot");
+    const why = $("dmWhy");
+    b.disabled = true;
+    b.textContent = "loading...";
+    why.textContent = "fetching demo/nshwasm.wasm";
+    try {
+      const { instance } = await loadEngine("demo/nshwasm.wasm");
+      eng = instance.exports;
+      mem = eng.memory;
+      (eng._initialize || eng._start)();
+
+      // preserveDrawingBuffer, so that a frame can be saved with a right
+      // click: without it the buffer is cleared as soon as the frame is
+      // composited and the picture comes out empty. The price is small, and
+      // carrying a picture away is part of what a showcase is looked at for.
+      gl = cv.getContext("webgl2", { antialias: true, preserveDrawingBuffer: true });
+      if (!gl) throw new Error("this browser has no WebGL2");
+      const p = gl.createProgram();
+      gl.attachShader(p, compile(gl.VERTEX_SHADER, VS));
+      gl.attachShader(p, compile(gl.FRAGMENT_SHADER, FS));
+      gl.linkProgram(p);
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+        throw new Error(gl.getProgramInfoLog(p));
+      prog = p;
+      vao = gl.createVertexArray();
+      gl.bindVertexArray(vao);
+      vbo = gl.createBuffer(); ebo = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
+      gl.enableVertexAttribArray(1);
+      gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, 12);
+
+      $("dmVeil").hidden = true;
+      build($("dmF").value);
+    } catch (e) {
+      b.disabled = false;
+      b.textContent = "Load the engine (4.2 MB)";
+      why.textContent = (e && e.name === "AbortError")
+        ? "the engine did not arrive within thirty seconds. The file is 4.2 MB " +
+          "and it is served from this same site, so something between the " +
+          "browser and the server is holding it - a proxy, an extension, or a " +
+          "connection that never finished."
+        : "the engine did not load: " + String((e && e.message) || e);
+    }
+  };
+
+  $("dmGo").onclick = () => { if (eng) build($("dmF").value); };
+  $("dmF").addEventListener("keydown", e => {
+    if (e.key === "Enter" && eng) build($("dmF").value);
+  });
+  $("dmPres").addEventListener("click", e => {
+    if (e.target.tagName !== "BUTTON") return;
+    $("dmF").value = e.target.textContent;
+    if (eng) build(e.target.textContent);
+  });
+
+  const turn = (dx, dy) => {
+    az -= dx * 0.008;
+    el = Math.min(1.45, Math.max(0.06, el + dy * 0.006));
+    draw();
+  };
+  cv.addEventListener("pointerdown", e => {
+    dragging = true; lastX = e.clientX; lastY = e.clientY;
+    cv.setPointerCapture(e.pointerId);
+  });
+  cv.addEventListener("pointermove", e => {
+    if (!dragging) return;
+    turn(e.clientX - lastX, e.clientY - lastY);
+    lastX = e.clientX; lastY = e.clientY;
+  });
+  cv.addEventListener("pointerup", e => {
+    dragging = false;
+    cv.releasePointerCapture(e.pointerId);
+  });
+  // The paper changes colour with the theme, and the frame has to follow.
+  matchMedia("(prefers-color-scheme:dark)").addEventListener("change", draw);
+})();
+</script>
 </html>
