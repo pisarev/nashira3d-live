@@ -294,11 +294,15 @@
       </div>
       <div class="stack">
         <p>The binding uses cffi in ABI mode, which means it reads the shared
-        library at run time and needs no compiler on your machine. The wheel
-        carries the binary for your platform and nothing else.</p>
-        <pre>pip install nashira3d-0.2.0-py3-none-win_amd64.whl</pre>
-        <p class="note">Wheels are built from the sources in the repository.
-        There is no package on PyPI yet.</p>
+        library at run time and needs no compiler on your machine. A wheel
+        carries the binary for one platform and nothing else.</p>
+        <p><b>There is no wheel to download yet</b>, and nothing on PyPI.
+        Building one is a single command once the core is built:</p>
+        <pre>python build_wheel.py</pre>
+        <p class="note">It puts the library inside the package, builds a wheel
+        tagged for your platform, and takes the copy back out. Installed into
+        an empty environment, without numpy and without the sources, that wheel
+        passes its own acceptance probe with no failures.</p>
       </div>
     </div>
   </section>
