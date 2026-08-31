@@ -61,6 +61,16 @@
 
   *{box-sizing:border-box}
   html{-webkit-text-size-adjust:100%}
+
+  /* THE hidden ATTRIBUTE HAS TO WIN, and without this line it does not. The
+     browser hides such an element with [hidden]{display:none} of its own, and
+     that rule is the weakest there is: any rule of ours that sets display on
+     the same element beats it. .veil sets display:flex, so hiding the veil in
+     script set the attribute and changed nothing on the screen - the demo
+     built its mesh, drew its frame, and a grey panel reading "loading..."
+     stayed on top of the finished picture. The draw button looked dead for the
+     same reason: it worked, and the result was covered. */
+  [hidden]{display:none !important}
   body{
     margin:0; background:var(--paper); color:var(--ink);
     font:400 1.0625rem/1.72 var(--serif);
