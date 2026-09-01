@@ -373,7 +373,7 @@
         <div class="plate">
           <canvas id="dmC" width="880" height="620" aria-label="the surface"></canvas>
           <div id="dmVeil" class="veil">
-            <button id="dmBoot" type="button">Load the engine (4.2 MB)</button>
+            <button id="dmBoot" type="button">Load the engine (3.7 MB)</button>
             <p class="note" id="dmWhy">The whole parser and mesh builder,
             compiled once. Nothing is fetched after that.</p>
           </div>
@@ -1300,9 +1300,9 @@
       build($("dmF").value);
     } catch (e) {
       b.disabled = false;
-      b.textContent = "Load the engine (4.2 MB)";
+      b.textContent = "Load the engine (3.7 MB)";
       why.textContent = (e && e.name === "AbortError")
-        ? "the engine did not arrive within thirty seconds. The file is 4.2 MB " +
+        ? "the engine did not arrive within thirty seconds. The file is 3.7 MB " +
           "and it is served from this same site, so something between the " +
           "browser and the server is holding it - a proxy, an extension, or a " +
           "connection that never finished."

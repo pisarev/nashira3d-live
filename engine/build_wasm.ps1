@@ -6,6 +6,40 @@
 # stated plainly on the page rather than hidden.
 $ErrorActionPreference = 'Stop'
 
+# The custom sections come off before the module goes out. The compiler leaves
+# a "name" section behind - half a megabyte of debugger names, and inside it the
+# full path the module was built at, which anyone who downloads the module can
+# read. It takes no part in execution. Stripping it here rather than by hand
+# means the next build cannot put the path back.
+function Remove-WasmCustomSections([string]$Path) {
+    $b = [System.IO.File]::ReadAllBytes($Path)
+    if ($b.Length -lt 8 -or $b[0] -ne 0 -or $b[1] -ne 0x61 -or $b[2] -ne 0x73 -or $b[3] -ne 0x6D) {
+        throw "$Path is not a WebAssembly module"
+    }
+    $ms = New-Object System.IO.MemoryStream
+    $ms.Write($b, 0, 8)
+    $i = 8
+    $dropped = 0
+    while ($i -lt $b.Length) {
+        $start = $i
+        $id = $b[$i]; $i++
+        $size = 0; $shift = 0
+        while ($true) {
+            $x = $b[$i]; $i++
+            $size = $size -bor (($x -band 0x7F) -shl $shift)
+            $shift += 7
+            if (($x -band 0x80) -eq 0) { break }
+        }
+        $end = $i + $size
+        if ($id -ne 0) { $ms.Write($b, $start, $end - $start) } else { $dropped += $size }
+        $i = $end
+    }
+    [System.IO.File]::WriteAllBytes($Path, $ms.ToArray())
+    $ms.Dispose()
+    return $dropped
+}
+
+
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Live = Split-Path -Parent $Here
 
@@ -59,5 +93,6 @@ $Built = @((Join-Path $Out 'nshwasm.wasm'), (Join-Path $Out 'nshwasm')) |
          Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $Built) { throw "the build said nothing, but there is no module in $Out" }
 Copy-Item $Built $Wasm -Force
+$Dropped = Remove-WasmCustomSections $Wasm
 $Size = [math]::Round((Get-Item $Wasm).Length / 1KB)
-Write-Output "nshwasm.wasm is ready, $Size KB"
+Write-Output "nshwasm.wasm is ready, $Size KB (custom sections stripped: $Dropped bytes)"
