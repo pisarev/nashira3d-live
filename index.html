@@ -162,6 +162,17 @@
     font-family:var(--mono); letter-spacing:.02em;
   }
 
+  /* --- the way in: three doors, one of them open ------------------------ */
+  .actions{display:flex; gap:.85rem; flex-wrap:wrap; align-items:center;
+           margin:1.6rem 0 .2rem}
+  .btn{font:400 .9375rem/1 var(--mono); letter-spacing:.02em;
+       padding:.85rem 1.4rem; border:1px solid var(--ink); transition:.18s;
+       text-decoration:none; display:inline-block}
+  .btn.solid{background:var(--ink); color:var(--paper)}
+  .btn.hollow{border-color:var(--rule); color:var(--ink-soft)}
+  .btn.solid:hover{background:var(--accent); border-color:var(--accent)}
+  .btn.hollow:hover{border-color:var(--ink); color:var(--ink)}
+
   /* --- rows with dotted leaders, as in a table of contents --------------- */
   .rows{margin:0}
   .rows > .row{
@@ -254,6 +265,7 @@
       <a href="#idea">Idea</a>
       <a href="#use">Use</a>
       <a href="#demo">Live</a>
+      <a href="demo/">Builder</a>
       <a href="#gallery">Gallery</a>
       <a href="#inside">Inside</a>
       <a href="#numbers">Numbers</a>
@@ -270,6 +282,13 @@
       grid of numbers you sampled from it beforehand. It builds the mesh, draws
       it on the graphics card, and hands back the pixels. No window is opened
       and no figure is created.</p>
+      <!-- The way in comes before the reading. Someone who wants to see the
+           thing work should not have to scroll past an argument for it. -->
+      <div class="actions">
+        <a class="btn solid" href="demo/">Try it live</a>
+        <a class="btn hollow" href="#use">Quick start</a>
+        <a class="btn hollow" href="https://github.com/pisarev/nashira3d">Source on GitHub</a>
+      </div>
     </div>
     <figure>
       <div class="plate">
@@ -546,7 +565,9 @@
   </footer>
 
 </div>
-<script>
+<script type="module">
+import { createRenderer } from "./demo/nsh_gl.js";
+import { loadEngine } from "./demo/nsh_engine.js";
 /* ---------------------------------------------------------------------
    The live demo.
 
@@ -559,305 +580,22 @@
    ramp, the lighting and the contour lines are the same code, moved from
    GLSL 330 to GLSL ES 300.
    --------------------------------------------------------------------- */
-(() => {
   const $ = id => document.getElementById(id);
   const cv = $("dmC"), stat = $("dmStat");
-  let gl = null, eng = null, mem = null, prog = null, vao = null, bgProg = null;
+  let gl = null, E = null;
   let lineProg = null, lineVao = null, lineCount = 0, showLines = true;
   let gridEbo = null, gridCount = 0, showLabels = true;
   let vbo = null, ebo = null, idxCount = 0, info = [0, 0, 0, 0];
   let az = 0.9, el = 0.45, dragging = false, lastX = 0, lastY = 0;
 
-  /* A minimal WASI shim: no files, only a clock and random bytes. The module
-     is a reactor - it has _initialize and never exits - so nothing here has
-     to pretend a process is running. */
-  const OK = 0, BADF = 8, NOSUP = 58;
-  const view = () => new DataView(mem.buffer);
-  const zero2 = (a, b) => { const v = view(); v.setUint32(a, 0, true); v.setUint32(b, 0, true); return OK; };
-  const wasi = {
-    args_get: () => OK, args_sizes_get: zero2,
-    environ_get: () => OK, environ_sizes_get: zero2,
-    clock_time_get: (i, p, o) => { view().setBigUint64(o, BigInt(Math.round(performance.now() * 1e6)), true); return OK; },
-    fd_close: () => BADF, fd_fdstat_get: () => BADF, fd_filestat_get: () => BADF,
-    fd_filestat_set_size: () => BADF, fd_filestat_set_times: () => BADF,
-    fd_prestat_get: () => BADF, fd_prestat_dir_name: () => BADF,
-    fd_read: () => BADF, fd_readdir: () => BADF, fd_seek: () => BADF, fd_tell: () => BADF,
-    fd_write: (f, i, n, w) => { view().setUint32(w, 0, true); return OK; },
-    path_create_directory: () => NOSUP, path_filestat_get: () => NOSUP,
-    path_filestat_set_times: () => NOSUP, path_open: () => NOSUP,
-    path_readlink: () => NOSUP, path_remove_directory: () => NOSUP,
-    path_rename: () => NOSUP, path_unlink_file: () => NOSUP,
-    poll_oneoff: () => NOSUP,
-    proc_exit: c => { throw new Error("the engine exited with " + c); },
-    random_get: (p, n) => { crypto.getRandomValues(new Uint8Array(mem.buffer, p, n)); return OK; }
-  };
 
   /* The background the library draws: a gradient with a vignette, not a flat
      fill. It comes from BG_SRC and BG_VERT_SRC/BG_FRAG_SRC in nsh_render.pas,
      carried over unchanged apart from the dialect line. A full-screen triangle
      is generated from gl_VertexID, so it needs no buffer of its own. */
-  /* The line program of the library, carried over from LINE_VERT_SRC and
-     LINE_FRAG_SRC in nsh_render.pas. The tint fades with depth so that the far
-     edges of the box do not compete with the surface for attention. */
-  /* ---- tick labels -------------------------------------------------------
-     The library keeps its own bitmap font: seventeen glyphs of five by seven
-     bits, drawn into a six by nine cell. The stretch is carried over as it is,
-     not cleaned up - sampled NEAREST, some columns double and some rows repeat,
-     and that is what the picture actually looks like. Digits, minus, dot, e and
-     the three axis letters are all the alphabet a tick label ever needs. */
-  const GLYPH_W = 5, GLYPH_H = 7, GLYPH_N = 17, CELL_W = 6, CELL_H = 9;
-  const BOX_XY = 1.0, BOX_Z = 1.0, DIV_COUNT = 5;
-  const FONT = [
-    [14, 17, 19, 21, 25, 17, 14],   /* 0 */
-    [ 4, 12,  4,  4,  4,  4, 14],   /* 1 */
-    [14, 17,  1,  2,  4,  8, 31],   /* 2 */
-    [31,  2,  4,  2,  1, 17, 14],   /* 3 */
-    [ 2,  6, 10, 18, 31,  2,  2],   /* 4 */
-    [31, 16, 30,  1,  1, 17, 14],   /* 5 */
-    [ 6,  8, 16, 30, 17, 17, 14],   /* 6 */
-    [31,  1,  2,  4,  8,  8,  8],   /* 7 */
-    [14, 17, 17, 14, 17, 17, 14],   /* 8 */
-    [14, 17, 17, 15,  1,  2, 12],   /* 9 */
-    [ 0,  0,  0, 31,  0,  0,  0],   /* - */
-    [ 0,  0,  0,  0,  0, 12, 12],   /* . */
-    [ 0,  0, 14, 17, 31, 16, 14],   /* e */
-    [ 0,  0, 17, 10,  4, 10, 17],   /* x */
-    [ 0,  0, 17, 17, 15,  1, 14],   /* y */
-    [ 0,  0, 31,  2,  4,  8, 31],   /* z */
-    [ 0,  0, 31,  0, 31,  0,  0]    /* = */
-  ];
-  const glyphOf = c => {
-    if (c >= "0" && c <= "9") return c.charCodeAt(0) - 48;
-    const k = "-.,=eExXyYzZ".indexOf(c);
-    if (k < 0) return -1;
-    return [10, 11, 11, 16, 12, 12, 13, 13, 14, 14, 15, 15][k];
-  };
-
-  let txtProg = null, txtTex = null, txtVao = null, txtVbo = null;
-
-  const TEXT_VS = `#version 300 es
-    layout(location = 0) in vec3 aAnchor;
-    layout(location = 1) in vec2 aOffset;
-    layout(location = 2) in vec2 aUV;
-    uniform mat4 uMVP;
-    uniform vec2 uPxToNdc;
-    out vec2 vUV;
-    void main() {
-      vec4 p = uMVP * vec4(aAnchor, 1.0);
-      p /= p.w;
-      /* Snap to a whole pixel. The anchor is a projected box corner and lands
-         wherever it lands; at a fractional position the five-by-seven font
-         breaks up - the library measured 38 per cent of letter pixels turning
-         into half-tones before this line was added. The offset is rounded too:
-         half a cell height is -4.5, and leaving it alone would spend the whole
-         gain on that one number. */
-      vec2 sc = floor(p.xy / uPxToNdc + 0.5) + floor(aOffset + 0.5);
-      gl_Position = vec4(sc * uPxToNdc, p.z, 1.0);
-      vUV = aUV;
-    }`;
-  const TEXT_FS = `#version 300 es
-    precision highp float;
-    in vec2 vUV;
-    uniform sampler2D uFont;
-    out vec4 fColor;
-    void main() {
-      float a = texture(uFont, vUV).r;
-      if (a < 0.5) discard;
-      fColor = vec4(0.85, 0.88, 0.94, 1.0);
-    }`;
-
-  /* The number under a tick. Three significant digits, and a plain exponent
-     for what does not fit - the library's own rule, spelled out the same way. */
-  const fmtTick = v => {
-    if (Number.isNaN(v)) return "?";
-    if (!Number.isFinite(v)) return v > 0 ? "inf" : "-inf";
-    const a = Math.abs(v);
-    if (a < 1e-10) return "0";
-    if (a < 1e-3 || a >= 1e5)
-      return v.toExponential(1).replace("e+", "e");
-    return String(Number(v.toPrecision(3)));
-  };
-
-  const LINE_VS = `#version 300 es
-    layout(location = 0) in vec3 aPos;
-    uniform mat4 uMVP;
-    out float vDep;
-    void main() {
-      vec4 p = uMVP * vec4(aPos, 1.0);
-      vDep = p.z / p.w;
-      gl_Position = p;
-    }`;
-
-  const LINE_FS = `#version 300 es
-    precision highp float;
-    in float vDep;
-    uniform vec4 uTint;
-    out vec4 fColor;
-    void main() {
-      float t = clamp(vDep * 0.5 + 0.5, 0.0, 1.0);
-      float k = mix(1.0, 0.32, smoothstep(0.55, 1.0, t));
-      fColor = vec4(uTint.rgb * k, uTint.a);
-    }`;
-
-  const BG_SRC = `
-    vec3 bgAt(vec2 uv) {
-      vec3 top = vec3(0.070, 0.092, 0.128);
-      vec3 bot = vec3(0.026, 0.035, 0.052);
-      vec3 c = mix(bot, top, smoothstep(0.0, 1.0, uv.y));
-      vec2 d = uv - 0.5;
-      c *= 1.0 - 0.55 * dot(d, d);
-      return c;
-    }`;
-
-  /* The box: twelve edges and the tick marks, exactly as BuildAxes builds them
-     in nsh_render.pas. The constants are its constants - BOX_XY 1, BOX_Z 1,
-     five divisions, tick 0.04 - and the vertices sit in the same normalised
-     box the mesh does, so the model scale in the MVP carries them along. */
-  const axesSegments = () => {
-    const B = 1.0, Z = 1.0, DIV = 5, TICK = 0.04, v = [];
-    const seg = (x1, y1, z1, x2, y2, z2) => v.push(x1, y1, z1, x2, y2, z2);
-    for (const z of [-Z, Z]) {
-      seg(-B, -B, z,  B, -B, z);
-      seg( B, -B, z,  B,  B, z);
-      seg( B,  B, z, -B,  B, z);
-      seg(-B,  B, z, -B, -B, z);
-    }
-    seg(-B, -B, -Z, -B, -B, Z);
-    seg( B, -B, -Z,  B, -B, Z);
-    seg( B,  B, -Z,  B,  B, Z);
-    seg(-B,  B, -Z, -B,  B, Z);
-    for (let i = 1; i < DIV; i++) {
-      const tt = -B + 2 * B * i / DIV;
-      seg(tt, -B, -Z, tt, -B - TICK, -Z);
-      seg(-B, tt, -Z, -B - TICK, tt, -Z);
-      const tz = -Z + 2 * Z * i / DIV;
-      seg(-B, -B, tz, -B - TICK, -B - TICK, tz);
-    }
-    return new Float32Array(v);
-  };
-
-  const BG_VS = `#version 300 es
-    out vec2 vUv;
-    void main() {
-      vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
-      vUv = p;
-      gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
-    }`;
-
-  const BG_FS = `#version 300 es
-    precision highp float;
-    ${BG_SRC}
-    in vec2 vUv;
-    out vec4 fColor;
-    void main() { fColor = vec4(bgAt(vUv), 1.0); }`;
-
-  const VS = `#version 300 es
-    layout(location = 0) in vec3 aPos;
-    layout(location = 1) in vec3 aNrm;
-    uniform mat4 uMVP;
-    uniform vec3 uScale;
-    uniform vec3 uNrmScale;
-    out vec3 vNrm;
-    out vec3 vPos;
-    out float vH;
-    void main() {
-      gl_Position = uMVP * vec4(aPos, 1.0);
-      vNrm = normalize(aNrm * uNrmScale);
-      vPos = aPos * uScale;
-      vH = aPos.z;
-    }`;
-
-  const FS = `#version 300 es
-    precision highp float;
-    in vec3 vNrm;
-    in vec3 vPos;
-    in float vH;
-    uniform vec3 uLight;
-    uniform vec3 uEye;
-    uniform int uShade;
-    uniform vec3 uCont;
-    out vec4 fColor;
-    vec3 ramp(float t) {
-      vec3 a = vec3(0.13, 0.18, 0.52);
-      vec3 b = vec3(0.10, 0.68, 0.56);
-      vec3 c = vec3(0.98, 0.86, 0.30);
-      return t < 0.5 ? mix(a, b, smoothstep(0.0, 1.0, t * 2.0))
-                     : mix(b, c, smoothstep(0.0, 1.0, (t - 0.5) * 2.0));
-    }
-    float contNum(float t) { return (uCont.x + t * uCont.y) / uCont.z; }
-    vec3 contInk(vec3 base, float f, float fw) {
-      float d  = abs(fract(f + 0.5) - 0.5) / max(fw, 1E-6);
-      float mn = 1.0 - smoothstep(0.30, 0.95, d);
-      float d5 = abs(fract(f * 0.2 + 0.5) - 0.5) * 5.0 / max(fw, 1E-6);
-      float mj = 1.0 - smoothstep(0.45, 1.25, d5);
-      float vis = (1.0 - smoothstep(0.40, 1.10, fw)) * smoothstep(0.004, 0.02, fw);
-      float a = clamp(mn * 0.55 + mj * 0.45, 0.0, 1.0) * vis;
-      return mix(base, vec3(0.07, 0.11, 0.17), a);
-    }
-    void main() {
-      vec3 n = normalize(vNrm);
-      vec3 l = normalize(uLight);
-      vec3 v = normalize(uEye - vPos);
-      if (dot(n, v) < 0.0) { n = -n; l.z = -l.z; }
-      vec3 h = normalize(l + v);
-      float d = max(dot(n, l), 0.0);
-      float w = d * 0.75 + 0.25;
-      float sp = pow(max(dot(n, h), 0.0), 42.0);
-      float rim = pow(1.0 - max(dot(n, v), 0.0), 3.0);
-      vec3 base = (uShade == 0) ? vec3(0.80, 0.83, 0.86)
-                                : ramp(clamp((vH + 1.0) * 0.5, 0.0, 1.0));
-      float spk = (uShade == 0) ? 0.13 : 0.30;
-      vec3 col = base * (0.20 + 0.80 * w);
-      col += vec3(0.95, 0.98, 1.00) * sp * spk;
-      col += vec3(0.35, 0.62, 0.80) * rim * 0.16;
-      if (uShade != 1) {
-        float f = contNum(vH);
-        col = contInk(col, f, fwidth(f));
-      }
-      fColor = vec4(col, 1.0);
-    }`;
-
-  const compile = (type, src) => {
-    const s = gl.createShader(type);
-    gl.shaderSource(s, src.trim());
-    gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
-      throw new Error(gl.getShaderInfoLog(s));
-    return s;
-  };
-
-  /* Matrices, written out rather than pulled from a library: four functions
-     are cheaper than a dependency, and the page loads nothing from anywhere
-     else. Column-major, as OpenGL wants. */
-  const mul = (a, b) => {
-    const o = new Float32Array(16);
-    for (let c = 0; c < 4; c++)
-      for (let r = 0; r < 4; r++) {
-        let s = 0;
-        for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k];
-        o[c * 4 + r] = s;
-      }
-    return o;
-  };
-  const perspective = (fovy, aspect, near, far) => {
-    const f = 1 / Math.tan(fovy / 2), o = new Float32Array(16);
-    o[0] = f / aspect; o[5] = f; o[10] = (far + near) / (near - far);
-    o[11] = -1; o[14] = 2 * far * near / (near - far);
-    return o;
-  };
-  const lookAt = (e, c, up) => {
-    const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-    const norm = a => { const L = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / L, a[1] / L, a[2] / L]; };
-    const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-    const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-    const f = norm(sub(c, e)), s = norm(cross(f, up)), u = cross(s, f);
-    const o = new Float32Array(16);
-    o[0] = s[0]; o[4] = s[1]; o[8] = s[2];
-    o[1] = u[0]; o[5] = u[1]; o[9] = u[2];
-    o[2] = -f[0]; o[6] = -f[1]; o[10] = -f[2];
-    o[12] = -dot(s, e); o[13] = -dot(u, e); o[14] = dot(f, e); o[15] = 1;
-    return o;
-  };
+  /* The renderer lives in demo/nsh_gl.js - one for the showcase and for the
+     builder alike. What stays here is what belongs to this page in particular:
+     the domain, the quality, the box proportions and the view. */
 
   const BOX = [1, 1, 0.3];          // the library's own default proportions
   // The distance is chosen so that the sheet takes up about half the frame.
@@ -866,321 +604,35 @@
   const DIST = 2.4;
   const HALF = 2.0;                 // the domain is -2..2, so the half is 2
   const QUALITY = 50;               // the library's own default
-
-  /* Where every label goes. Carried over from the library step for step: the
-     edge that reads lowest on screen takes the x numbers, the same test on the
-     other pair takes y, and z hangs on the leftmost of the four uprights. */
-  const labelVerts = (mvp, w, h) => {
-    const V = [];
-    const add = (text, wx, wy, wz, pxX, pxY) => {
-      let x0 = pxX;
-      for (const c of text) {
-        const g = glyphOf(c);
-        if (g >= 0) {
-          const u0 = g / GLYPH_N, u1 = (g + 1) / GLYPH_N;
-          V.push(wx, wy, wz, x0,          pxY,          u0, 1,
-                 wx, wy, wz, x0 + CELL_W, pxY,          u1, 1,
-                 wx, wy, wz, x0,          pxY + CELL_H, u0, 0,
-                 wx, wy, wz, x0 + CELL_W, pxY,          u1, 1,
-                 wx, wy, wz, x0 + CELL_W, pxY + CELL_H, u1, 0,
-                 wx, wy, wz, x0,          pxY + CELL_H, u0, 0);
-        }
-        x0 += CELL_W;
-      }
-    };
-    const proj = (x, y, z) => {
-      const cx = mvp[0] * x + mvp[4] * y + mvp[8] * z + mvp[12];
-      const cy = mvp[1] * x + mvp[5] * y + mvp[9] * z + mvp[13];
-      let cw = mvp[3] * x + mvp[7] * y + mvp[11] * z + mvp[15];
-      if (Math.abs(cw) < 1e-9) cw = 1e-9;
-      return [cx / cw, cy / cw];
-    };
-    const midY = (x, y) => proj(x, y, -BOX_Z)[1];
-    const edgeY = midY(0, -BOX_XY) <= midY(0, BOX_XY) ? -BOX_XY : BOX_XY;
-    const edgeX = midY(-BOX_XY, 0) <= midY(BOX_XY, 0) ? -BOX_XY : BOX_XY;
-    let bestX = 1e30, cornX = -BOX_XY, cornY = -BOX_XY;
-    for (let i = 0; i < 4; i++) {
-      const cx = BOX_XY * (1 - 2 * (i & 1));
-      const cy = BOX_XY * (1 - 2 * ((i >> 1) & 1));
-      const v = proj(cx, cy, 0)[0];
-      if (v < bestX) { bestX = v; cornX = cx; cornY = cy; }
-    }
-    /* A label is kept with an eye on its neighbour. When an edge points nearly
-       along the line of sight all five of its numbers pile into one spot. The
-       two end labels are never dropped: an axis whose end is unlabelled looks
-       shorter than it is, and that is worse than a crowd. Distance is measured
-       in pixels, because letters keep their size on screen. */
-    const lastX = [0, 0], lastY = [0, 0], lastOk = [false, false];
-    const keep = (axis, idx, x, y, chars) => {
-      const p = proj(x, y, -BOX_Z);
-      const px = (p[0] * 0.5 + 0.5) * w, py = (1 - (p[1] * 0.5 + 0.5)) * h;
-      if (idx === 0 || idx === DIV_COUNT || !lastOk[axis]) {
-        lastX[axis] = px; lastY[axis] = py; lastOk[axis] = true;
-        return true;
-      }
-      const ok = Math.abs(px - lastX[axis]) >= CELL_W * (chars + 1)
-              || Math.abs(py - lastY[axis]) >= CELL_H * 1.4;
-      if (ok) { lastX[axis] = px; lastY[axis] = py; }
-      return ok;
-    };
-    for (let i = 0; i <= DIV_COUNT; i++) {
-      const tt = -BOX_XY + 2 * BOX_XY * i / DIV_COUNT;
-      let s = fmtTick(-HALF + 2 * HALF * i / DIV_COUNT);
-      if (keep(0, i, tt, edgeY, s.length))
-        add(s, tt, edgeY, -BOX_Z, -CELL_W * s.length / 2, -CELL_H - 5);
-      s = fmtTick(-HALF + 2 * HALF * i / DIV_COUNT);
-      if (keep(1, i, edgeX, tt, s.length))
-        add(s, edgeX, tt, -BOX_Z, -CELL_W * s.length / 2, -CELL_H - 5);
-    }
-    /* z gets two divisions, not five: the box is a third of the height and
-       five numbers there run together. Taking every other one of the five is
-       not an option - the top value would go unlabelled, and an axis that lies
-       about its own span is worse than one with no numbers at all. */
-    for (let i = 0; i <= 2; i++) {
-      const s = fmtTick(info[0] + (info[1] - info[0]) * i / 2);
-      add(s, cornX, cornY, -BOX_Z + 2 * BOX_Z * i / 2,
-          -CELL_W * s.length - 10, -CELL_H / 2);
-    }
-    /* The axis letter sits BEYOND the end of its edge: in the middle it lands
-       on top of a tick number. */
-    add("x", BOX_XY * 1.18, edgeY, -BOX_Z, -CELL_W / 2, -CELL_H - 5);
-    add("y", edgeX, BOX_XY * 1.18, -BOX_Z, -CELL_W / 2, -CELL_H - 5);
-    add("z", cornX, cornY, BOX_Z * 1.35, -CELL_W - 12, -CELL_H / 2);
-    return new Float32Array(V);
-  };
+  let R = null;
 
   const draw = () => {
-    if (!gl || !idxCount) return;
-    const w = cv.width, h = cv.height;
-    gl.viewport(0, 0, w, h);
-    const paper = getComputedStyle(document.documentElement)
-                    .getPropertyValue("--plate").trim() || "#E9EBE4";
-    const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(paper);
-    if (m) gl.clearColor(parseInt(m[1], 16) / 255, parseInt(m[2], 16) / 255,
-                         parseInt(m[3], 16) / 255, 1);
-    else gl.clearColor(0.91, 0.92, 0.89, 1);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-
-    /* The backdrop goes down first and takes no part in the depth buffer: it
-       is behind everything by construction, and testing it against depth would
-       only invite a driver to disagree. */
-    if (bgProg) {
-      gl.disable(gl.DEPTH_TEST);
-      gl.useProgram(bgProg);
-      gl.bindVertexArray(vao);
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
-    }
-    gl.enable(gl.DEPTH_TEST);
-
-    const ce = Math.cos(el), se = Math.sin(el);
-    const eye = [DIST * ce * Math.cos(az), DIST * ce * Math.sin(az), DIST * se];
-    /* The box proportions belong in the model matrix, not in the shader: the
-       vertex shader passes aPos to uMVP untouched and uses uScale only for
-       the world position it hands to the lighting. Leaving the scale out here
-       drew the surface at a box of 1.0 in height where the library draws 0.3
-       - three times too tall, and the gate that compares frames said so in
-       pixels before anyone said it in words. */
-    const scale = (sx, sy, sz) => {
-      const o = new Float32Array(16);
-      o[0] = sx; o[5] = sy; o[10] = sz; o[15] = 1;
-      return o;
-    };
-    const mvp = mul(mul(perspective(0.9, w / h, 0.05, 40),
-                        lookAt(eye, [0, 0, 0], [0, 0, 1])),
-                    scale(BOX[0], BOX[1], BOX[2]));
-    gl.useProgram(prog);
-    const U = n => gl.getUniformLocation(prog, n);
-    gl.uniformMatrix4fv(U("uMVP"), false, mvp);
-    gl.uniform3f(U("uScale"), BOX[0], BOX[1], BOX[2]);
-    const zspan = Math.max(info[1] - info[0], 1e-9);
-    gl.uniform3f(U("uNrmScale"), HALF / BOX[0], HALF / BOX[1], zspan / (2 * BOX[2]));
-    gl.uniform3f(U("uLight"), Math.cos(2.2) * Math.cos(0.9),
-                 Math.sin(2.2) * Math.cos(0.9), Math.sin(0.9));
-    gl.uniform3f(U("uEye"), eye[0], eye[1], eye[2]);
-    gl.uniform1i(U("uShade"), 2);
-    /* The step of the contour lines, and this time it really is the rule the
-       library uses: NiceStep in nsh_ticks.pas takes the span over FIFTEEN, not
-       fourteen, and picks the nearest of 1, 2, 5 across three decades by the
-       distance of logarithms. The old fourteen agreed by luck on the sample
-       formulas and would have parted company on others. */
-    const raw = zspan / 15;
-    const e = Math.floor(Math.log10(Math.max(raw, 1e-12)));
-    let step = 1, best = Infinity;
-    for (let k = -1; k <= 1; k++)
-      for (const m of [1, 2, 5]) {
-        const cand = m * Math.pow(10, e + k);
-        const d = Math.abs(Math.log(cand) - Math.log(raw));
-        if (cand > 0 && d < best) { best = d; step = cand; }
-      }
-    gl.uniform3f(U("uCont"), (info[0] + info[1]) / 2, zspan / 2, step);
-    gl.bindVertexArray(vao);
-    /* The surface is pushed one step back in depth: without it the grid lines,
-       lying in the very same places, fight it for pixels and shimmer. */
-    gl.enable(gl.POLYGON_OFFSET_FILL);
-    gl.polygonOffset(1.0, 1.0);
-    gl.drawElements(gl.TRIANGLES, idxCount, gl.UNSIGNED_INT, 0);
-    gl.disable(gl.POLYGON_OFFSET_FILL);
-
-    if (showLines && lineProg && gridCount > 0) {
-      gl.useProgram(lineProg);
-      gl.uniformMatrix4fv(gl.getUniformLocation(lineProg, "uMVP"), false, mvp);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gridEbo);
-      gl.enable(gl.BLEND);
-      /* Only the colour is blended. A plain blendFunc would touch the alpha
-         channel as well, and a line at 0.3 would leave the frame with 152
-         where 255 belongs - the frame would stop being opaque. */
-      gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
-      gl.uniform4f(gl.getUniformLocation(lineProg, "uTint"), 0.85, 0.93, 1.00, 0.30);
-      gl.drawElements(gl.LINES, gridCount, gl.UNSIGNED_INT, 0);
-      gl.disable(gl.BLEND);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
-    }
-
-    /* The box goes on last, with the tint the library gives it. */
-    if (showLines && lineProg && lineCount > 0) {
-      gl.useProgram(lineProg);
-      gl.uniformMatrix4fv(gl.getUniformLocation(lineProg, "uMVP"), false, mvp);
-      gl.uniform4f(gl.getUniformLocation(lineProg, "uTint"), 0.62, 0.70, 0.82, 1.0);
-      gl.bindVertexArray(lineVao);
-      gl.drawArrays(gl.LINES, 0, lineCount);
-      gl.bindVertexArray(null);
-    }
-
-    /* The numbers go on top of everything with depth off, as the library puts
-       them: a label belongs to the frame, not to the scene. */
-    if (showLabels && txtProg && idxCount) {
-      const tv = labelVerts(mvp, w, h);
-      if (tv.length) {
-        gl.disable(gl.DEPTH_TEST);
-        gl.useProgram(txtProg);
-        gl.uniformMatrix4fv(gl.getUniformLocation(txtProg, "uMVP"), false, mvp);
-        gl.uniform2f(gl.getUniformLocation(txtProg, "uPxToNdc"), 2 / w, 2 / h);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, txtTex);
-        gl.uniform1i(gl.getUniformLocation(txtProg, "uFont"), 0);
-        gl.bindVertexArray(txtVao);
-        gl.bindBuffer(gl.ARRAY_BUFFER, txtVbo);
-        gl.bufferData(gl.ARRAY_BUFFER, tv, gl.DYNAMIC_DRAW);
-        gl.drawArrays(gl.TRIANGLES, 0, tv.length / 7);
-        gl.bindVertexArray(null);
-        gl.enable(gl.DEPTH_TEST);
-      }
-    }
+    if (!R || !idxCount) return;
+    R.draw({
+      az: az, el: el, box: BOX, dist: DIST, half: HALF,
+      dom: [-HALF, HALF, -HALF, HALF],
+      lines: showLines, labels: showLabels,
+      plate: getComputedStyle(document.documentElement)
+               .getPropertyValue("--plate").trim() || "#E9EBE4"
+    });
   };
 
-  const note = () => {
-    const p = eng.walloc(256), n = eng.note(p, 256);
-    const s = new TextDecoder().decode(new Uint8Array(mem.buffer.slice(p, p + n)));
-    eng.wfree(p);
-    return s;
-  };
 
   const build = text => {
-    const b = new TextEncoder().encode(text);
-    const p = eng.walloc(b.length);
-    new Uint8Array(mem.buffer, p, b.length).set(b);
-    const t0 = performance.now();
-    const cnt = eng.build(p, b.length, -HALF, HALF, -HALF, HALF, QUALITY);
-    const ms = performance.now() - t0;
-    eng.wfree(p);
-    if (cnt < 0) { stat.textContent = "the engine refused: " + note(); return; }
-
-    const vb = eng.walloc(cnt * 6 * 4);
-    const got = eng.verts(vb, cnt * 6);
-    // The buffer is copied out at once: any later call may grow the memory of
-    // the module, and a view onto the old one is detached without warning.
-    const raw = new Float32Array(mem.buffer.slice(vb, vb + got * 4));
-    eng.wfree(vb);
-
-    const ib = eng.walloc(cnt * 8 * 4);
-    const ic = eng.idx(ib, cnt * 8);
-    const idx = new Uint32Array(mem.buffer.slice(ib, ib + ic * 4));
-    eng.wfree(ib);
-
-    const inf = eng.walloc(32);
-    eng.info(inf);
-    info = Array.from(new Float64Array(mem.buffer.slice(inf, inf + 32)));
-    eng.wfree(inf);
-
-    /* Bringing the mesh to the unit box - this is the drawing side, and the
-       library does the same thing before it hands vertices to the card: x and
-       y are divided by the larger half of the domain, z by the half-span of
-       the height. */
-    const zmid = (info[0] + info[1]) / 2, zh = Math.max((info[1] - info[0]) / 2, 1e-9);
-    const v = new Float32Array(raw.length);
-    for (let i = 0; i < raw.length; i += 6) {
-      v[i] = raw[i] / HALF;
-      v[i + 1] = raw[i + 1] / HALF;
-      v[i + 2] = (raw[i + 2] - zmid) / zh;
-      v[i + 3] = raw[i + 3]; v[i + 4] = raw[i + 4]; v[i + 5] = raw[i + 5];
-    }
-
-    gl.bindVertexArray(vao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, v, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
-
-    /* The grid over the surface, thinned exactly as RndUpload thins it: every
-       twelfth node a side, and a segment dropped whenever either end fell on a
-       hole - a line drawn across a gap would claim there is surface where
-       there is none. */
-    const side = info[2] | 0;
-    const g = [];
-    if (side > 1) {
-      const step = Math.max(1, (side - 1) / 12 | 0);
-      const finite = k => Number.isFinite(raw[k * 6 + 2]);
-      for (let j = 0; j < side; j += step)
-        for (let i = 0; i < side - 1; i++) {
-          const a = j * side + i;
-          if (finite(a) && finite(a + 1)) g.push(a, a + 1);
-        }
-      for (let i = 0; i < side; i += step)
-        for (let j = 0; j < side - 1; j++) {
-          const a = j * side + i;
-          if (finite(a) && finite(a + side)) g.push(a, a + side);
-        }
-    }
-    gridCount = g.length;
-    if (gridCount > 0) {
-      if (!gridEbo) gridEbo = gl.createBuffer();
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gridEbo);
-      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(g), gl.STATIC_DRAW);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
-    }
-    idxCount = ic;
-
-    stat.textContent = cnt.toLocaleString("en") + " vertices, " +
-      (ic / 3).toLocaleString("en") + " triangles, " + info[2] + " nodes a side, " +
-      (info[3] ? info[3] + " cells the function left undefined" : "no undefined cells") +
-      " - built in " + Math.round(ms) + " ms";
+    const m = E.build(text, -HALF, HALF, -HALF, HALF, QUALITY);
+    if (m.error) { stat.textContent = "the engine refused: " + m.error; return; }
+    info = m.info;
+    /* The mesh goes to the renderer: bringing it to the unit box and building the
+       grid indices belong to it rather than to the page. */
+    R.upload(m.raw, m.idx, m.info);
+    idxCount = R.idxCount;
+    stat.textContent = m.count.toLocaleString("en") + " vertices, " +
+      m.tris.toLocaleString("en") + " triangles, " + m.info[2] + " nodes a side, " +
+      (m.info[3] ? m.info[3] + " cells the function left undefined" : "no undefined cells") +
+      " - built in " + Math.round(m.ms) + " ms";
     draw();
   };
 
-  /* Fetched whole and then instantiated, rather than streamed.
-     instantiateStreaming is the shorter way and the more fragile one: it
-     insists on a Content-Type of application/wasm and it goes wrong behind a
-     proxy that buffers the body. Four megabytes fit in memory without a
-     thought, so the sturdy path is the right one here.
-
-     The wait is bounded and the reason is said. A page that hangs on
-     "loading..." with nothing else to show is the worst of the three possible
-     endings: worse than a refusal, because a refusal at least names itself. */
-  const loadEngine = async url => {
-    const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), 30000);
-    try {
-      const r = await fetch(url, { signal: ctl.signal, cache: "no-store" });
-      if (!r.ok) throw new Error("the server answered " + r.status + " for " + url);
-      const buf = await r.arrayBuffer();
-      if (buf.byteLength < 1024 * 1024)
-        throw new Error("the module came back as " + buf.byteLength +
-                        " bytes, which is not the engine");
-      return WebAssembly.instantiate(buf, { wasi_snapshot_preview1: wasi });
-    } finally {
-      clearTimeout(timer);
-    }
-  };
 
   $("dmBoot").onclick = async () => {
     const b = $("dmBoot");
@@ -1189,10 +641,7 @@
     b.textContent = "loading...";
     why.textContent = "fetching demo/nshwasm.wasm";
     try {
-      const { instance } = await loadEngine("demo/nshwasm.wasm");
-      eng = instance.exports;
-      mem = eng.memory;
-      (eng._initialize || eng._start)();
+      E = await loadEngine("demo/nshwasm.wasm");
 
       // preserveDrawingBuffer, so that a frame can be saved with a right
       // click: without it the buffer is cleared as soon as the frame is
@@ -1200,101 +649,7 @@
       // carrying a picture away is part of what a showcase is looked at for.
       gl = cv.getContext("webgl2", { antialias: true, preserveDrawingBuffer: true });
       if (!gl) throw new Error("this browser has no WebGL2");
-      const p = gl.createProgram();
-      gl.attachShader(p, compile(gl.VERTEX_SHADER, VS));
-      gl.attachShader(p, compile(gl.FRAGMENT_SHADER, FS));
-      gl.linkProgram(p);
-      if (!gl.getProgramParameter(p, gl.LINK_STATUS))
-        throw new Error(gl.getProgramInfoLog(p));
-      prog = p;
-
-      /* The background program is built the same way, and its failure is not
-         fatal: without it the canvas keeps the flat clear colour and the plot
-         still appears. A demo that shows the surface on the wrong backdrop is
-         worth more than a demo that shows nothing. */
-      try {
-        const bp = gl.createProgram();
-        gl.attachShader(bp, compile(gl.VERTEX_SHADER, BG_VS));
-        gl.attachShader(bp, compile(gl.FRAGMENT_SHADER, BG_FS));
-        gl.linkProgram(bp);
-        if (gl.getProgramParameter(bp, gl.LINK_STATUS)) bgProg = bp;
-      } catch (e) {
-        bgProg = null;
-      }
-
-      /* The line program, and its failure is not fatal either: without it the
-         plot loses its box and keeps its surface. */
-      try {
-        const lp = gl.createProgram();
-        gl.attachShader(lp, compile(gl.VERTEX_SHADER, LINE_VS));
-        gl.attachShader(lp, compile(gl.FRAGMENT_SHADER, LINE_FS));
-        gl.linkProgram(lp);
-        if (gl.getProgramParameter(lp, gl.LINK_STATUS)) {
-          lineProg = lp;
-          const segs = axesSegments();
-          lineCount = segs.length / 3;
-          lineVao = gl.createVertexArray();
-          gl.bindVertexArray(lineVao);
-          const lb = gl.createBuffer();
-          gl.bindBuffer(gl.ARRAY_BUFFER, lb);
-          gl.bufferData(gl.ARRAY_BUFFER, segs, gl.STATIC_DRAW);
-          gl.enableVertexAttribArray(0);
-          gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 12, 0);
-          gl.bindVertexArray(null);
-        }
-      } catch (e) {
-        lineProg = null;
-      }
-
-      /* The text program. Failing it costs the numbers on the axes and nothing
-         else, so it degrades the same way the other two do. */
-      try {
-        const tp = gl.createProgram();
-        gl.attachShader(tp, compile(gl.VERTEX_SHADER, TEXT_VS));
-        gl.attachShader(tp, compile(gl.FRAGMENT_SHADER, TEXT_FS));
-        gl.linkProgram(tp);
-        if (gl.getProgramParameter(tp, gl.LINK_STATUS)) {
-          txtProg = tp;
-          /* One atlas row, seventeen glyphs across, one byte a texel. */
-          const pix = new Uint8Array(GLYPH_N * GLYPH_W * GLYPH_H);
-          for (let g = 0; g < GLYPH_N; g++)
-            for (let row = 0; row < GLYPH_H; row++)
-              for (let col = 0; col < GLYPH_W; col++)
-                pix[row * (GLYPH_N * GLYPH_W) + g * GLYPH_W + col] =
-                  (FONT[g][row] >> (GLYPH_W - 1 - col)) & 1 ? 255 : 0;
-          txtTex = gl.createTexture();
-          gl.bindTexture(gl.TEXTURE_2D, txtTex);
-          gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, GLYPH_N * GLYPH_W, GLYPH_H, 0,
-                        gl.RED, gl.UNSIGNED_BYTE, pix);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-          txtVao = gl.createVertexArray();
-          txtVbo = gl.createBuffer();
-          gl.bindVertexArray(txtVao);
-          gl.bindBuffer(gl.ARRAY_BUFFER, txtVbo);
-          gl.enableVertexAttribArray(0);
-          gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 28, 0);
-          gl.enableVertexAttribArray(1);
-          gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 28, 12);
-          gl.enableVertexAttribArray(2);
-          gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 28, 20);
-          gl.bindVertexArray(null);
-        }
-      } catch (e) {
-        txtProg = null;
-      }
-
-      vao = gl.createVertexArray();
-      gl.bindVertexArray(vao);
-      vbo = gl.createBuffer(); ebo = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-      gl.enableVertexAttribArray(0);
-      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
-      gl.enableVertexAttribArray(1);
-      gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, 12);
+      R = createRenderer(gl);
 
       $("dmVeil").hidden = true;
       build($("dmF").value);
@@ -1322,14 +677,14 @@
      view, redraw, read back the frame. Nothing here changes what the page does
      when nobody is watching. */
   window.__nsh = {
-    view: (a, e) => { az = a; el = e; if (eng) draw(); },
+    view: (a, e) => { az = a; el = e; if (E) draw(); },
     /* Lets the gate ask for a frame without the box, so that the pixels the
        box touches can be found by measurement rather than guessed at. Nothing
        a viewer sees depends on it: the switch is back on before the next
        redraw a person triggers. */
-    lines: on => { showLines = !!on; if (eng) draw(); },
-    labels: on => { showLabels = !!on; if (eng) draw(); },
-    redraw: () => { if (eng) draw(); },
+    lines: on => { showLines = !!on; if (E) draw(); },
+    labels: on => { showLabels = !!on; if (E) draw(); },
+    redraw: () => { if (E) draw(); },
     frame: () => {
       if (!gl) return null;
       const w = cv.width, h = cv.height;
@@ -1346,17 +701,17 @@
         s += String.fromCharCode.apply(null, out.subarray(i, i + 8192));
       return { w: w, h: h, data: btoa(s) };
     },
-    state: () => ({ az: az, el: el, ready: !!eng, idx: idxCount, info: info })
+    state: () => ({ az: az, el: el, ready: !!E, idx: idxCount, info: info })
   };
 
-  $("dmGo").onclick = () => { if (eng) build($("dmF").value); };
+  $("dmGo").onclick = () => { if (E) build($("dmF").value); };
   $("dmF").addEventListener("keydown", e => {
-    if (e.key === "Enter" && eng) build($("dmF").value);
+    if (e.key === "Enter" && E) build($("dmF").value);
   });
   $("dmPres").addEventListener("click", e => {
     if (e.target.tagName !== "BUTTON") return;
     $("dmF").value = e.target.textContent;
-    if (eng) build(e.target.textContent);
+    if (E) build(e.target.textContent);
   });
 
   const turn = (dx, dy) => {
@@ -1379,6 +734,5 @@
   });
   // The paper changes colour with the theme, and the frame has to follow.
   matchMedia("(prefers-color-scheme:dark)").addEventListener("change", draw);
-})();
 </script>
 </html>
