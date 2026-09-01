@@ -937,38 +937,6 @@ function paintResNote(aw, ah) {
 
 
 
-/* The rectangles of the panels in FRAME pixels.
-
-   The core places its labels in free spots, and only the page knows which
-   spots are free: the panels lie over the canvas and the core cannot see them.
-   The coordinates are converted from layout pixels to frame pixels by the same
-   factor the frame was asked for with: at High the frame is devicePixelRatio
-   times larger than the layout. */
-function panelRects(W, H) {
-  const r = view.getBoundingClientRect();
-  /* The canvas may report a size of ZERO: the panel is not laid out yet, the tab
-     is in the background, the window is minimised. Dividing by such a size put
-     "Infinity" into the request - the core got rubbish instead of a list of
-     occupied places. An empty list is more honest: we do not know the places,
-     so we do not report any. */
-  if (!(r.width > 0) || !(r.height > 0)) return "";
-  const kx = W / r.width, ky = H / r.height;
-  const out = [];
-  for (const el of document.querySelectorAll(".panel")) {
-    /* Visibility is checked by SIZE and opacity, not by offsetParent: every panel
-       has position: fixed, and their offsetParent is ALWAYS null. With that
-       check the list came out empty and the core got nothing. */
-    const b = el.getBoundingClientRect();
-    if (parseFloat(getComputedStyle(el).opacity) < 0.05) continue;
-    const x = Math.round((b.left - r.left) * kx), y = Math.round((b.top - r.top) * ky);
-    const w = Math.round(b.width * kx),          h = Math.round(b.height * ky);
-    if (w > 0 && h > 0) out.push(x + "," + y + "," + w + "," + h);
-  }
-  return out.join(";");
-}
-
-let wantFitZ = false;
-
 /* A brief notice. An automatic refit changes the GEOMETRY, and doing that in
    silence will not do: a person sees the relief sink and decides something has
    broken. */
@@ -983,12 +951,6 @@ function flash(text) {
   flashBox.className = "on";
   clearTimeout(flashTimer);
   flashTimer = setTimeout(() => { flashBox.className = ""; }, 1800);
-}
-
-/* The standing point is a state, not a consequence. Neither the tilt nor the
-   wheel computes it: a tilt turns the head, the wheel raises and lowers. */
-function standPoint() {
-  return [camX, camY];
 }
 
 /* Set the camera so that the central ray arrives at a given point. */
@@ -1133,7 +1095,18 @@ function camBasis(a, e) {
 function screenScale() {
   const w = Math.max(1, view.clientWidth), h = Math.max(1, view.clientHeight);
   const tv = Math.tan(fov / 2);
-  return [tv * (w / h), tv, w, h];
+  /* THE PROPORTIONS ARE THOSE OF THE FRAME, not of the box on the page. Usually
+     they are the same, since the frame is made from the size of the box; but
+     the size can be set apart from the layout, and then a region computed on
+     the proportions of the box is a region for a frame nobody drew. Measured:
+     with the frame at 880 by 620 inside a wider box the region came out as if
+     the proportions were 1.55, and it differed from the library's by a percent
+     along every edge; taken from the canvas the two agree to the sixth decimal.
+
+     The two sizes that follow stay in the units of the LAYOUT: they convert the
+     movements of a mouse, and a mouse runs across the layout. */
+  const cw = Math.max(1, cc.width || w), chh = Math.max(1, cc.height || h);
+  return [tv * (cw / chh), tv, w, h];
 }
 
 /* The world direction of the ray through a point of the frame. sx and sy run
@@ -1296,6 +1269,196 @@ function groundAt(sx, sy) {
   return [camX + d[0] * t, camY + d[1] * t, 0];
 }
 
+/* HOW FAR THE MESH MAY REACH. The library's own rule: eight camera heights plus
+   the thickness of the layer, and never less than one unit of the task. With
+   the camera IN the plane and a layer of no thickness the limit would come out
+   zero and the region would collapse to a point. */
+const FAR_IN_HEIGHTS = 8;
+const EDGE_STEPS = 24;   // points per edge - a sixteenth of a degree at the horizon
+
+/* The half-width of the DECLARED region. It sets the thickness of the layer and
+   the scale of the relief, and it is frozen: only a person declaring a region
+   moves it. Freezing is what keeps the region from depending on the layer that
+   depends on the region. */
+function declHalf() {
+  const h = Math.max((declDom[1] - declDom[0]) / 2, (declDom[3] - declDom[2]) / 2);
+  return (h > 1e-12) ? h : 1;
+}
+
+/* The height of the box, as a fraction of the half-width of the region. */
+function boxZ() {
+  const v = parseFloat($("bz").value);
+  return (Number.isFinite(v) && v > 0) ? v : 0.3;
+}
+
+/* THE REGION THE VIEW ASKS FOR - CamRegion of nsh_camera.pas.
+
+   On the endless sheet nothing is declared: the region is a CONSEQUENCE of
+   where the camera stands and where it looks, and it is recomputed for every
+   frame. Until this was carried over, the page meshed the declared square
+   whatever the camera did, and the sheet showed as a small patch adrift in the
+   background.
+
+   The whole border of the frame is walked, twenty-four steps to a side, and not
+   its four corners. The ray that reaches furthest runs almost ALONG the layer,
+   and it lies on the line of the horizon - that is, on the left and right edges
+   between the corners, not in a corner. Measured in the library at a tilt of
+   twenty degrees: four corners gave a region of 3.3 units while the middle of
+   the frame showed ground from unit eight to unit fifteen.
+
+   The body of the intersection is convex, so the extreme points of its
+   projection lie on the SIDE surface of the pyramid - which is what the border
+   of the frame walks. */
+function viewRegion() {
+  const zh = boxZ() * declHalf();       // half the thickness of the layer
+  const zl = -zh;
+  let far = FAR_IN_HEIGHTS * (Math.abs(camH) + (zh - zl));
+  if (!(far > 1)) far = 1;
+  let x0 = 0, x1 = 0, y0 = 0, y1 = 0, ok = false;
+  const take = (px, py) => {
+    if (!Number.isFinite(px) || !Number.isFinite(py)) return;
+    if (!ok) { x0 = x1 = px; y0 = y1 = py; ok = true; return; }
+    if (px < x0) x0 = px;
+    if (px > x1) x1 = px;
+    if (py < y0) y0 = py;
+    if (py > y1) y1 = py;
+  };
+  const sweep = d => {
+    let lo, hi;
+    if (Math.abs(d[2]) < 1e-12) {
+      /* The ray runs along the layer: either wholly inside it or wholly
+         outside. There is no division here, so no infinity can arise. */
+      if (camH < zl || camH > zh) return;
+      lo = 0;
+      hi = far;
+    } else {
+      let t1 = (zl - camH) / d[2], t2 = (zh - camH) / d[2];
+      if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
+      /* A ray going AWAY from the layer gives nothing: there is no surface
+         behind it. */
+      if (t2 < 0) return;
+      /* A ray that does not reach the layer within the limit cannot be thrown
+         away: where it points, the sheet would break off in the middle of the
+         frame. The segment is clamped to the limit, not discarded. */
+      lo = Math.min(Math.max(t1, 0), far);
+      hi = Math.min(Math.max(t2, 0), far);
+    }
+    take(camX + d[0] * lo, camY + d[1] * lo);
+    take(camX + d[0] * hi, camY + d[1] * hi);
+  };
+  /* The apex of the pyramid belongs to the intersection only if it lies in the
+     layer itself. */
+  if (camH >= zl && camH <= zh) take(camX, camY);
+  for (let side = 0; side < 4; side++)
+    for (let i = 0; i <= EDGE_STEPS; i++) {
+      const t = -1 + 2 * i / EDGE_STEPS;
+      const sx = (side < 2) ? t : (side === 2 ? -1 : 1);
+      const sy = (side === 0) ? 1 : (side === 1 ? -1 : t);
+      sweep(rayWorld(sx, sy, az, el));
+    }
+  /* Nothing was met - the frame is all sky. Meshing a region of no size would
+     divide by zero further on, so the caller is told plainly. */
+  if (!ok || !(x1 - x0 > 1e-12) || !(y1 - y0 > 1e-12)) return null;
+  return [x0, x1, y0, y1];
+}
+
+/* HOW MANY NODES A SIDE. The library's own rule: 0 gives 16, 100 gives 256,
+   linear between them. */
+function sideOf(q) {
+  const v = Math.max(0, Math.min(100, q | 0));
+  return 16 + Math.round(v * 2.4);
+}
+
+/* SAMPLE LINES PLACED BY SCREEN DENSITY - CamAxisLines of nsh_camera.pas.
+
+   There are exactly as many nodes as the quality gives, and on a shallow view
+   an even spacing wastes them: the region stretches tens of units towards the
+   horizon, where the whole distance fits into ten rows of the frame, while
+   underfoot, where every fold shows, there are not enough. Measured in the
+   library: at a tilt of 0.22 the region is 30 units across, which is 0.12 of a
+   unit per node EVERYWHERE - including where 0.12 covers a hundredth of a
+   pixel.
+
+   The density comes out of the perspective itself, with no matrices and no
+   field of view: a segment of length one along the axis, standing at a point,
+   takes up a share of the screen proportional to its part ACROSS the line of
+   sight divided by the distance to the camera. The constant factors cancel when
+   the spacing is levelled out.
+
+   SEPARABLE - each axis placed on its own. That is NOT the same as evenness on
+   the screen: looking along a diagonal it is only a first approximation. Said
+   plainly, because the temptation to call it a screen grid is strong and the
+   unevenness along the diagonal stays. What it buys is the whole placing of
+   labels, which rests on the grid being separable.
+
+   Degenerate cases - a segment of no length, the camera in the plane itself,
+   all weights zero - fall back to an even spacing: worse, but always
+   meaningful. */
+function axisLines(a0, a1, other, alongX, n) {
+  const PROBES = 512;
+  const even = () => {
+    const L = new Float64Array(n);
+    for (let q = 0; q < n; q++) L[q] = a0 + (a1 - a0) * q / (n - 1);
+    return L;
+  };
+  if (n < 2) return new Float64Array(0);
+  if (!((a1 - a0) > 0)) return even();
+  /* The reference height is the middle of the LAYER - the same one the region
+     is cut against and the camera stands above. */
+  const ez = camH;
+  const [fwd] = camBasis(az, el);
+  const da = (a1 - a0) / PROBES;
+  const w = new Float64Array(PROBES + 1);
+  for (let i = 0; i <= PROBES; i++) {
+    const a = a0 + da * i;
+    let vx = (alongX ? a : other) - camX;
+    let vy = (alongX ? other : a) - camY;
+    let vz = -ez;
+    const L = Math.hypot(vx, vy, vz);
+    if (L < 1e-9) { w[i] = 0; continue; }
+    vx /= L; vy /= L; vz /= L;
+    /* the part of a unit step along the axis that lies ACROSS the line of sight */
+    const dot = alongX ? vx : vy;
+    let perp = 1 - dot * dot;
+    if (perp < 0) perp = 0;
+    w[i] = Math.sqrt(perp) / L;
+    /* BEHIND THE CAMERA - almost no weight. The bounding rectangle of the
+       region reaches behind one's back on a shallow view: what is seen is a
+       wide slanted trapezium, and the rectangle around it takes in more. Giving
+       nodes to what cannot be seen is the same waste this is here to avoid.
+       Not zero but a hundredth: at zero the lines in the unseen part would
+       merge into one, the grid would get cells of no size, and the normals in
+       them a division by zero. */
+    if (vx * fwd[0] + vy * fwd[1] + vz * fwd[2] <= 0) w[i] *= 0.01;
+    if (!Number.isFinite(w[i])) w[i] = 0;
+  }
+  const cum = new Float64Array(PROBES + 1);
+  for (let i = 1; i <= PROBES; i++)
+    cum[i] = cum[i - 1] + (w[i] + w[i - 1]) * 0.5 * da;
+  if (!(cum[PROBES] > 0)) return even();
+  const lines = new Float64Array(n);
+  lines[0] = a0;
+  lines[n - 1] = a1;
+  let j = 0;
+  for (let k = 1; k <= n - 2; k++) {
+    const target = cum[PROBES] * k / (n - 1);
+    while (j < PROBES && cum[j + 1] < target) j++;
+    if (j >= PROBES) lines[k] = a1;
+    else {
+      const d = cum[j + 1] - cum[j];
+      lines[k] = a0 + da * (j + (d <= 0 ? 0 : (target - cum[j]) / d));
+    }
+    /* Strictly increasing: with a degenerate weight two lines in a row would
+       coincide, the grid would get cells of no size, and the normals in them a
+       division by zero. */
+    if (lines[k] <= lines[k - 1])
+      lines[k] = lines[k - 1] + (a1 - a0) * 1e-6;
+  }
+  if (lines[n - 1] <= lines[n - 2])
+    lines[n - 1] = lines[n - 2] + (a1 - a0) * 1e-6;
+  return lines;
+}
+
 function orbitPivot() {
   const c = rayWorld(0, 0, az, el);        // the central ray
   let t = null;
@@ -1454,32 +1617,6 @@ function tiltStand(v) {
   return Math.max(-lim, Math.min(lim, v));
 }
 
-function coreQuery(W, H) {
-  return "f=" + encodeURIComponent($("f").value) +
-    "&shade=" + shade +
-    "&region=" + (drawIn === "plane" ? "view" : "declared") +
-    "&x0=" + declDom[0] + "&x1=" + declDom[1] +
-    "&y0=" + declDom[2] + "&y1=" + declDom[3] +
-    "&q=" + $("q").value + "&axes=" + ($("ax").checked ? 1 : 0) +
-    "&az=" + az + "&el=" + el + "&fov=" + fov +
-    "&bx=1&by=1&bz=" + ($("bz").value || 0.3) +
-    "&fit=0" +
-    "&stand=1&camx=" + standPoint()[0] + "&camy=" + standPoint()[1] +
-    "&camh=" + camH +
-    "&grid=1&obst=" + encodeURIComponent(panelRects(W, H)) +
-    (wantFitZ ? "&fitz=1" : "") +
-    "&autoz=" + ($("autoz").checked ? 1 : 0) +
-    "&w=" + W + "&h=" + H;
-}
-
-/* THE DEADLINE ON A FRAME. Without one a hung answer stops the page FOREVER
-   and in silence: coreBusy stays raised, the frame pump skips every pass, and it
-   looks like a frozen picture with not a word about why.
-
-   Twenty seconds is not a round number for the sake of roundness. The heaviest
-   measured frame (quality 100, full screen, a rebuilt mesh) takes 55 ms; twenty
-   seconds is three hundred times that, and it cannot be hit by accident. */
-const FRAME_DEADLINE_MS = 20000;
 
 async function coreFetch() {
   /* A pinned size belongs to the gate: a comparison of frames is only worth
@@ -1498,12 +1635,75 @@ async function coreFetch() {
        few. */
     const f = $("f").value;
     const q = parseInt($("q").value, 10);
-    const key = f + "|" + declDom.join(",") + "|" + q;
+    const plane = (drawIn === "plane");
+    /* A NEW FORMULA IS A NEW SCALE, once. Everything else - a region, a camera,
+       a quality - leaves the frozen scale of the relief alone. */
+    if (f !== zFormula) { zFormula = f; zFreeze = null; }
+    /* WHICH REGION GETS MESHED. In the cube it is the one a person declared.
+       On the endless sheet there is nothing to declare, so it is recomputed
+       from the camera for every frame - and the mesh follows it, because the
+       region is part of what the mesh is made of. */
+    const useDom = plane ? (viewRegion() || declDom) : declDom;
+    usedDom = useDom.slice();
+    /* On the sheet the camera belongs in the key as well: it decides not only
+       where the region falls but where inside it the nodes stand. */
+    const key = f + "|" + useDom.join(",") + "|" + q
+              + (plane ? "|" + [camX, camY, camH, az, el].join(",") : "");
     const t0 = performance.now();
     if (key !== meshKey) {
-      const m = E.build(f, declDom[0], declDom[1], declDom[2], declDom[3], q);
+      /* THE SCALE OF THE RELIEF COMES FROM THE DECLARED REGION, and is then
+         frozen. On the sheet the region in view changes with every step, and a
+         scale taken from it would change along with it: the same hill would be
+         drawn to a different height depending on how much ground happened to
+         fall into the frame.
+         The library takes its ZMid and ZSpan from the first mesh after a change
+         of formula, and that first mesh is built on the DECLARED region -
+         the region in view is not computed until the scale exists, so it makes
+         a second pass once the scale is frozen. Here the same thing is done in
+         the open: one extra mesh on the declared region, once per formula.
+         Measured on sin(x)*cos(y): the declared square spans 1.68 in z while
+         twelve units of sheet span 2.00, and every contour line moved. */
+      if (!zFreeze && plane) {
+        const z = E.build(f, declDom[0], declDom[1], declDom[2], declDom[3], q);
+        if (z.error) { errBox.textContent = z.error; return; }
+        zFreeze = [(z.info[0] + z.info[1]) / 2, z.info[1] - z.info[0]];
+        zArmed = true;
+      }
+      const n = sideOf(q);
+      const m = plane
+        ? E.buildAt(f,
+                    axisLines(useDom[0], useDom[1],
+                              (useDom[2] + useDom[3]) / 2, true, n),
+                    axisLines(useDom[2], useDom[3],
+                              (useDom[0] + useDom[1]) / 2, false, n))
+        : E.build(f, useDom[0], useDom[1], useDom[2], useDom[3], q);
       if (m.error) { errBox.textContent = m.error; return; }
-      R.upload(m.raw, m.idx, m.info);
+      if (!zFreeze) {
+        zFreeze = [(m.info[0] + m.info[1]) / 2, m.info[1] - m.info[0]];
+        zArmed = true;
+      } else if ($("autoz").checked && zFreeze[1] > 0) {
+        /* AUTO Z. The span the mesh NEEDS is compared with the frozen one.
+           Twice as big and the scale is refitted; back under one and a half and
+           the catch is released.
+           Releasing it happens in the SAME transaction, right after the refit,
+           and not on the next frame. Otherwise it deadlocks: the test lives in
+           the rebuilding of the mesh, after a refit there is no rebuilding, and
+           should the region grow again the ratio never falls under one and a
+           half. Measured in the library: auto z fired EXACTLY ONCE per formula
+           and never answered again. */
+        const need = m.info[1] - m.info[0];
+        if (need > 0) {
+          let ratio = need / zFreeze[1];
+          if (zArmed && ratio > 2) {
+            zFreeze = [(m.info[0] + m.info[1]) / 2, need];
+            zArmed = false;
+            ratio = 1;
+            flash("Vertical scale refitted - the range had doubled");
+          }
+          if (!zArmed && ratio < 1.5) zArmed = true;
+        }
+      }
+      R.upload(m.raw, m.idx, m.info, zFreeze);
       meshKey = key;
       meshInfo = m.info;
       meshMs = m.ms;
@@ -1517,23 +1717,48 @@ async function coreFetch() {
        subtracted and the LARGER half divides. This is the library's own
        conversion, and getting it wrong puts the camera where the surface is
        not. */
-    const half = Math.max((declDom[1] - declDom[0]) / 2,
-                          (declDom[3] - declDom[2]) / 2) || 1;
-    const cx = (declDom[0] + declDom[1]) / 2, cy = (declDom[2] + declDom[3]) / 2;
-    const bz = parseFloat($("bz").value) || 0.3;
+    const half = Math.max((useDom[1] - useDom[0]) / 2,
+                          (useDom[3] - useDom[2]) / 2) || 1;
+    const cx = (useDom[0] + useDom[1]) / 2, cy = (useDom[2] + useDom[3]) / 2;
+    /* THE RELIEF KEEPS THE SCALE OF THE DECLARED REGION. Everything is
+       divided by the half-width of the MESHED region, so a box height fixed
+       in those units would re-inflate the relief as the region grows - walk
+       further and the hills would grow with the distance. The library holds
+       its ZK to 0.6 * ZHalf0 / ZSpan for the same reason. In the cube the two
+       halves are the same region and the correction is exactly one. */
+    const bz = boxZ() * declHalf() / half;
+    const wantLines = (pinLines === null) ? $("ax").checked : pinLines;
+    const wantLabels = (pinLabels === null) ? $("ax").checked : pinLabels;
     const SHADE = { contours: 0, colour: 1, both: 2 };
     R.draw({
       az: az, el: el, dist: DIST_DEFAULT, fov: fov,
       stand: [(camX - cx) / half, (camY - cy) / half, camH / half],
       box: [1, 1, bz],
       half: half,
-      dom: declDom.slice(),
+      dom: useDom.slice(),
       shade: SHADE[shade] === undefined ? 0 : SHADE[shade],
-      lines: (pinLines === null) ? $("ax").checked : pinLines,
-      labels: (pinLabels === null) ? $("ax").checked : pinLabels,
+      lines: wantLines,
+      /* On the endless sheet the box has no edges to draw and the marks
+         along them have nothing to measure. The mesh grid stays: it is
+         what shows the shape of the sheet. */
+      box3d: !plane,
+      labels: wantLabels && !plane,
+      /* The far edge dissolves only where the edge is an artefact of the
+         limit. A declared region has edges a person put there. */
+      meshHalf: plane
+        ? [(useDom[1] - useDom[0]) / 2 / half, (useDom[3] - useDom[2]) / 2 / half]
+        : [0, 0],
       plate: getComputedStyle(document.documentElement)
                .getPropertyValue("--plate").trim() || "#0b1017"
     });
+    /* The region in view is what the readout must show: on the sheet it is a
+       reading, not a setting. A field being typed into is left alone - the
+       number under the cursor belongs to the person. */
+    if (plane) {
+      dom = useDom.slice();
+      const at = document.activeElement;
+      if (!at || DOM.indexOf(at.id) < 0) showDomain();
+    }
     coreMs = performance.now() - t0;
 
     if (!rough) { fullMs.push(coreMs); if (fullMs.length > 7) fullMs.shift(); }
@@ -1660,7 +1885,7 @@ function setDrawIn(mode) {
     box.textContent =
       "The plot has no edges: the region follows from where the camera stands and "
       + "where it looks. Drop a perpendicular to the plane and the wheel changes that "
-      + "distance &mdash; forward is closer from either side. Sampling follows the screen: "
+      + "distance - forward is closer from either side. Sampling follows the screen: "
       + "dense underfoot, sparse towards the horizon, and the far edge dissolves into "
       + "the background because it is the edge of our sampling, not of the function.";
   } else {
@@ -1813,36 +2038,6 @@ setShade("contours");
    gesture that, with a bounded subject, only leads it out of the frame. */
 setMode(mouseCube);
 
-/* ---------- THE REGION IN VIEW ---------------------------------------------
-   The plane is endless, and as much of it is visible as the angle takes in. So
-   what is computed is NOT the size of a sheet to fit the frame but the other way
-   round: four rays through the corners of the frame meet the plane, and the
-   rectangle they give is what the formula is computed over. The edge of the
-   sheet is never seen, because there is no edge.
-
-   Half a frame at a distance D is seen under tan(fov/2). On the plane, across
-   the line of sight that is the same multiplied by the aspect ratio, and ALONG
-   the line of sight it is divided by sin(el): the plane is tilted to the ray,
-   and it stretches into the distance. Near the horizon sin(el) tends to zero and
-   the region runs off to infinity - which is why the stretch is bounded.
-
-   The rectangle is turned about the vertical by the azimuth, and a region is
-   given along the x and y axes, so its bounding rectangle is taken. */
-
-const HORIZON = 8;   // how many times it may stretch into the distance
-
-/* The tilt changes AT A CONSTANT HEIGHT of the camera.
-
-   The camera is given as an orbit around a point on the plane, and its height
-   equals dist * sin(el). Lay the tilt down and the height fell of its own
-   accord, and it looked as though the camera were diving at the surface. It
-   was diving.
-
-   Now, when the tilt changes, the distance is recomputed so that the product
-   stays as it was: look lower and you look further, but you do not descend.
-   Near the horizon sin tends to zero and the distance would run off to
-   infinity, so it is bounded. */
-const MIN_SIN = 1 / HORIZON;
 
 
 
@@ -1875,6 +2070,14 @@ let dom = [-1, 1, -1, 1];
 
    Now the declared domain is changed only by a PERSON and by a preset. */
 let declDom = [-1, 1, -1, 1];
+/* The region that was last meshed. On the endless sheet it is not the
+   declared one, and a gate has to see which of the two the mesh was built
+   on - that is the whole of what the recomputation does. */
+let usedDom = declDom.slice();
+/* The frozen scale of the relief: its middle and its span. Null means it
+   has yet to be taken from the first mesh. zArmed is the catch of auto z -
+   see where it is tested. */
+let zFreeze = null, zFormula = null, zArmed = true;
 
 
 const fmtDom = v => {
@@ -2292,7 +2495,17 @@ $("bfit").onclick = () => {
 /* Fit Z is a ONE-OFF action. The flag is raised, leaves with the next frame and
    is cleared at once: keeping it on would mean recomputing the scale every
    frame, that is, returning to exactly the behaviour that was left behind. */
-$("bfitz").onclick = () => { wantFitZ = true; mark(); };
+/* FIT Z. The scale of the relief is frozen at the first mesh after a change
+   of formula, so that the hills keep their height while the region moves.
+   This is the way out: take the scale again from what is on screen now.
+   The mesh is dropped along with it - the scale is applied where the mesh is
+   handed to the renderer, and without a rebuild nothing would happen. */
+$("bfitz").onclick = () => {
+  zFreeze = null;
+  meshKey = "";
+  flash("Vertical scale taken from what is on screen");
+  mark();
+};
 
 /* The presets are written IN THE LIBRARY'S DIALECT, not in the one usual for C
    and JS: arctan, arcsin, lg, x mod 2. There is no other dialect here any
@@ -2581,6 +2794,14 @@ paintMotionNote();
 window.__nshB = {
   ready: () => coreOk === true,
   set: o => {
+    /* THE MODE GOES FIRST. Switching it moves the tilt away from a grazing
+       angle and swaps the height of the box, so a camera set before it would
+       be overwritten by the switch. */
+    /* The mode is switched through the page's own handler and not by
+       assigning the variable: it carries the box height, the camera and the
+       controls with it, and a gate that set only the variable would be
+       measuring a state a person can never reach. */
+    if (o.mode !== undefined && o.mode !== drawIn) setDrawIn(o.mode);
     if (o.f !== undefined) $("f").value = o.f;
     if (o.q !== undefined) $("q").value = String(o.q);
     if (o.dom) { declDom = o.dom.slice(); dom = o.dom.slice(); showDomain(); }
@@ -2627,7 +2848,8 @@ window.__nshB = {
     return { w: w, h: h, data: btoa(s) };
   },
   state: () => ({ az: az, el: el, camx: camX, camy: camY, camh: camH,
-                  dom: declDom.slice(), mode: drawIn, shade: shade,
+                  dom: declDom.slice(), used: usedDom.slice(),
+                  bz: boxZ(), mode: drawIn, shade: shade,
                   ready: coreOk === true, info: meshInfo })
 };
 

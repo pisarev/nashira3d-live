@@ -98,7 +98,35 @@ function makeEngine(eng, memRef) {
     const ms = performance.now() - t0;
     eng.wfree(p);
     if (cnt < 0) return { error: note() };
+    return harvest(cnt, ms);
+  };
 
+  /* The same mesh on GIVEN sample lines. On the endless sheet they are not
+     evenly spaced: nodes go where they are seen, dense underfoot and sparse
+     towards the horizon. Choosing them is the camera's business and is done
+     by the caller; the module only builds on what it is handed. */
+  const buildAt = (text, xs, ys) => {
+    const b = new TextEncoder().encode(text);
+    const p = eng.walloc(b.length);
+    new Uint8Array(mem().buffer, p, b.length).set(b);
+    const xp = eng.walloc(xs.length * 8);
+    const yp = eng.walloc(ys.length * 8);
+    new Float64Array(mem().buffer, xp, xs.length).set(xs);
+    new Float64Array(mem().buffer, yp, ys.length).set(ys);
+    const t0 = performance.now();
+    const cnt = eng.build_at(p, b.length, xp, xs.length, yp, ys.length);
+    const ms = performance.now() - t0;
+    eng.wfree(p);
+    eng.wfree(xp);
+    eng.wfree(yp);
+    if (cnt < 0) return { error: note() };
+    return harvest(cnt, ms);
+  };
+
+  /* Fetching the finished mesh is the same whichever way it was built, and it
+     is written once: two copies of a memory walk part on the first edit, and
+     the parting shows up as a torn picture rather than as an error. */
+  const harvest = (cnt, ms) => {
     const vb = eng.walloc(cnt * 6 * 4);
     const got = eng.verts(vb, cnt * 6);
     const raw = new Float32Array(mem().buffer.slice(vb, vb + got * 4));
@@ -117,5 +145,5 @@ function makeEngine(eng, memRef) {
     return { raw: raw, idx: idx, info: info, count: cnt, tris: ic / 3, ms: ms };
   };
 
-  return { build: build, note: note, raw: eng };
+  return { build: build, buildAt: buildAt, note: note, raw: eng };
 }

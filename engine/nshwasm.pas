@@ -73,6 +73,49 @@ begin
   Result := Length(GS.Verts);
 end;
 
+{ The same mesh, but on GIVEN sample lines: they need not be evenly spaced.
+
+  This is what the endless sheet is built on. Nodes are placed by screen
+  density - dense underfoot, sparse towards the horizon - because an even
+  spacing hands half of them to a distance that occupies ten rows of the frame.
+  Choosing the lines is the camera's business and belongs to the caller; here
+  the mesh is built on what it decided.
+
+  Returns the number of vertices, or minus one on a refusal - the reason is then
+  asked of WNote. }
+function WBuildAt(Text: PAnsiChar; Size: LongInt; Xs: PDouble; NX: LongInt;
+  Ys: PDouble; NY: LongInt): LongInt; cdecl;
+var
+  F: AnsiString;
+  Lx, Ly: array of Double;
+begin
+  GOk := False;
+  GErr := '';
+  if (Text = nil) or (Size <= 0) or (Size > 4096) then
+  begin
+    GErr := 'the formula is empty or too long';
+    Exit(-1);
+  end;
+  { Two lines are the least a grid can be built on, and 4096 is far above what
+    any quality asks for - the top is 256. The bound is here so that a wrong
+    number from the page cannot reach a memory move. }
+  if (Xs = nil) or (Ys = nil) or (NX < 2) or (NY < 2) or (NX > 4096) or
+    (NY > 4096) then
+  begin
+    GErr := 'the sample lines are missing or out of range';
+    Exit(-1);
+  end;
+  SetLength(F, Size);
+  Move(Text^, F[1], Size);
+  SetLength(Lx, NX);
+  SetLength(Ly, NY);
+  Move(Xs^, Lx[0], NX * SizeOf(Double));
+  Move(Ys^, Ly[0], NY * SizeOf(Double));
+  if not BuildSurfaceFrom(F, Lx, Ly, GS, GErr) then Exit(-1);
+  GOk := True;
+  Result := Length(GS.Verts);
+end;
+
 { The vertices in a row: x, y, z, nx, ny, nz - six single-precision numbers to a
   vertex, exactly as TVertex holds them. Returns the number of numbers WRITTEN. }
 function WVerts(Buffer: PSingle; Capacity: LongInt): LongInt; cdecl;
@@ -140,6 +183,7 @@ exports
   WAlloc name 'walloc',
   WFree  name 'wfree',
   WBuild name 'build',
+  WBuildAt name 'build_at',
   WVerts name 'verts',
   WIdx   name 'idx',
   WInfo  name 'info',

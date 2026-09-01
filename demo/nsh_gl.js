@@ -23,6 +23,11 @@ export function createRenderer(gl) {
      belongs to the module, and every page gets its own instance. */
   let prog = null, bgProg = null, lineProg = null, lineVao = null, lineCount = 0;
   let vao = null, vbo = null, ebo = null, gridEbo = null, gridCount = 0;
+  /* The scale the vertices were normalised by. Everything that reads a
+     height afterwards has to read it through the SAME pair - the shading of
+     the normals, the reference of the contour lines and their step - or the
+     lines land on levels the surface does not have. */
+  let zMid = 0, zSpan = 1;
   let idxCount = 0, info = [0, 0, 0, 0];
 
   /* The line program of the library, carried over from LINE_VERT_SRC and
@@ -199,11 +204,14 @@ export function createRenderer(gl) {
 
   const FS = `#version 300 es
     precision highp float;
+    ${BG_SRC}
     in vec3 vNrm;
     in vec3 vPos;
     in float vH;
     uniform vec3 uLight;
     uniform vec3 uEye;
+    uniform vec2 uMeshHalf;
+    uniform vec2 uViewport;
     uniform int uShade;
     uniform vec3 uCont;
     out vec4 fColor;
@@ -243,6 +251,40 @@ export function createRenderer(gl) {
       if (uShade != 1) {
         float f = contNum(vH);
         col = contInk(col, f, fwidth(f));
+      }
+      /* THE FAR EDGE DISSOLVES. On the endless sheet the mesh has to stop
+         somewhere, and a straight cut across the frame would read as the
+         edge of the surface - which it is not. Counted along THE PATH LEFT
+         to the mesh boundary rather than by distance from the eye: the mesh
+         is built on a BOUNDING rectangle, so one number for the limit would
+         dissolve the corners and the sides differently.
+
+         It dissolves INTO THE COLOUR OF THE BACKGROUND, not into
+         transparency: blending would need an order of drawing and would
+         argue with the depth test. The background is computed by the very
+         function that paints it, so it matches exactly.
+
+         uMeshHalf.y <= 0 means do not dissolve: a declared region has edges
+         a person put there, and they are the subject. */
+      if (uMeshHalf.y > 0.0) {
+        vec2 o = uEye.xy;
+        vec2 dir = vPos.xy - o;
+        float t = 1.0e30;
+        if (abs(dir.x) > 1.0e-9) {
+          float bx = (dir.x > 0.0) ? uMeshHalf.x : -uMeshHalf.x;
+          t = min(t, (bx - o.x) / dir.x);
+        }
+        if (abs(dir.y) > 1.0e-9) {
+          float by = (dir.y > 0.0) ? uMeshHalf.y : -uMeshHalf.y;
+          t = min(t, (by - o.y) / dir.y);
+        }
+        float r = max(t - 1.0, 0.0);
+        float u = clamp(1.0 - r / 1.5, 0.0, 1.0);
+        /* A smoothed step, not u*u: its derivative is zero at BOTH ends, and
+           the ledge it leaves stays below one level of brightness out of
+           255. The plain square left twelve, and twelve is visible. */
+        float k = u * u * (3.0 - 2.0 * u);
+        col = mix(col, bgAt(gl_FragCoord.xy / uViewport), k);
       }
       fColor = vec4(col, 1.0);
     }`;
@@ -471,13 +513,17 @@ export function createRenderer(gl) {
     const U = n => gl.getUniformLocation(prog, n);
     gl.uniformMatrix4fv(U("uMVP"), false, mvp);
     gl.uniform3f(U("uScale"), BOX[0], BOX[1], BOX[2]);
-    const zspan = Math.max(info[1] - info[0], 1e-9);
+    const zspan = Math.max(zSpan, 1e-9);
     gl.uniform3f(U("uNrmScale"), o.half / BOX[0], o.half / BOX[1], zspan / (2 * BOX[2]));
     const laz = (o.light && o.light[0] !== undefined) ? o.light[0] : 2.2;
     const lel = (o.light && o.light[1] !== undefined) ? o.light[1] : 0.9;
     gl.uniform3f(U("uLight"), Math.cos(lel) * Math.cos(laz),
                  Math.cos(lel) * Math.sin(laz), Math.sin(lel));
     gl.uniform3f(U("uEye"), eye[0], eye[1], eye[2]);
+    const mh = o.meshHalf || [0, 0];
+    gl.uniform2f(U("uMeshHalf"), mh[0], mh[1]);
+    gl.uniform2f(U("uViewport"), gl.drawingBufferWidth,
+                 gl.drawingBufferHeight);
     /* 0 contours, 1 colour, 2 both - the library's own numbering. */
     gl.uniform1i(U("uShade"), (o.shade === undefined) ? 2 : o.shade);
     /* The step of the contour lines, and this time it really is the rule the
@@ -494,7 +540,7 @@ export function createRenderer(gl) {
         const d = Math.abs(Math.log(cand) - Math.log(raw));
         if (cand > 0 && d < best) { best = d; step = cand; }
       }
-    gl.uniform3f(U("uCont"), (info[0] + info[1]) / 2, zspan / 2, step);
+    gl.uniform3f(U("uCont"), zMid, zspan / 2, step);
     gl.bindVertexArray(vao);
     /* The surface is pushed one step back in depth: without it the grid lines,
        lying in the very same places, fight it for pixels and shimmer. */
@@ -519,7 +565,9 @@ export function createRenderer(gl) {
     }
 
     /* The box goes on last, with the tint the library gives it. */
-    if (o.lines && lineProg && lineCount > 0) {
+    /* The box is asked for separately from the mesh grid. On the endless
+       sheet the grid is the subject and the box has no edges to draw. */
+    if (o.lines && o.box3d !== false && lineProg && lineCount > 0) {
       gl.useProgram(lineProg);
       gl.uniformMatrix4fv(gl.getUniformLocation(lineProg, "uMVP"), false, mvp);
       gl.uniform4f(gl.getUniformLocation(lineProg, "uTint"), 0.62, 0.70, 0.82, 1.0);
@@ -656,7 +704,13 @@ export function createRenderer(gl) {
      the LARGER half-width and the height by half the span. The showcase got away
      with dividing by HALF because its domain is square and centred on zero; the
      builder's is not. */
-  const upload = (raw, idx, inf) => {
+  /* zref, when given, is the FROZEN scale of the relief: its middle and its
+     span. Without it the mesh is normalised by its own extremes, and on the
+     endless sheet the hills would then breathe with every step - the region
+     changes, the extremes change, and the same hill is drawn to a different
+     height. The library freezes it at the first mesh after a change of
+     formula for exactly that reason. */
+  const upload = (raw, idx, inf, zref) => {
     info = inf;
     const n = raw.length / 6;
     const cx = (raw[0] + raw[(n - 1) * 6]) / 2;
@@ -664,9 +718,12 @@ export function createRenderer(gl) {
     let half = Math.max(Math.abs(raw[(n - 1) * 6] - cx),
                         Math.abs(raw[(n - 1) * 6 + 1] - cy));
     if (half < 1e-12) half = 1;
-    const zmid = (info[0] + info[1]) / 2;
-    let zh = (info[1] - info[0]) / 2;
-    if (zh < 1e-12) zh = 1;
+    const zmid = zref ? zref[0] : (info[0] + info[1]) / 2;
+    let span = zref ? zref[1] : (info[1] - info[0]);
+    if (span < 1e-12) span = 1;
+    const zh = span / 2;
+    zMid = zmid;
+    zSpan = span;
     const v = new Float32Array(raw.length);
     for (let i = 0; i < raw.length; i += 6) {
       v[i] = (raw[i] - cx) / half;
