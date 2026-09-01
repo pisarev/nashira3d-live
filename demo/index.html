@@ -4,6 +4,10 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Nashira3D - surface builder</title>
 <link rel="icon" type="image/png" href="favicon.png">
+<!-- The marks are not called logo.png. Ad blockers match that name and refuse
+     the request outright: measured on the published page, both marks came back
+     as ERR_BLOCKED_BY_CLIENT while the server served them with 200. A visitor
+     with a blocker would see two broken images and no reason for them. -->
 <!-- The mesh builder and the renderer are shared with the rest of the site:
      one copy of each, in demo/. Two copies drift apart on the first edit, and
      the drift shows up in a picture rather than in a diff.
@@ -445,7 +449,7 @@ window.__nshModsReady({ createRenderer, loadEngine });
 
 <div class="panel" id="pTop">
   <div class="brand">
-    <img src="logo-mark.png" width="256" height="256" alt="">
+    <img src="mark.png" width="256" height="256" alt="">
     <div class="sub"><b>Nashira3D</b>surface preview</div>
     <button id="aboutBtn" type="button">About</button>
   </div>
@@ -617,7 +621,7 @@ window.__nshModsReady({ createRenderer, loadEngine });
         <circle cx="330" cy="26" r="1.9" fill="#fff4c1"/>
       </g>
       </svg>
-      <img src="logo.png" width="512" height="154" alt="Nashira3D">
+      <img src="wordmark.png" width="512" height="154" alt="Nashira3D">
     </div>
     <div class="rule"></div>
     <div class="body">
@@ -672,7 +676,7 @@ window.__nshModsReady({ createRenderer, loadEngine });
 </div>
 
 <div id="firstrun">
-  <img src="logo.png" width="512" height="154" alt="">
+  <img src="wordmark.png" width="512" height="154" alt="">
   <b>Drag to circle the plot.</b>
   <span>The plot is drawn inside a cube, and the left button circles it. The
   wheel moves the camera closer and further; double&#8209;click on the surface to
