@@ -33,7 +33,7 @@ library nshwasm;
 {$mode objfpc}{$H+}
 
 uses
-  SysUtils, nsh_surface;
+  SysUtils, nsh_surface, nsh_fasteval;
 
 var
   GS   : TSurface;
@@ -116,6 +116,15 @@ begin
   Result := Length(GS.Verts);
 end;
 
+{ How many points of a mesh were computed by the fast back end rather than by
+  the interpreter. Not a curiosity: a check that only compares pictures cannot
+  tell a fast path that agrees from one that quietly retired itself, and this
+  number is the difference between the two. }
+function WFastPoints: Double; cdecl;
+begin
+  Result := FastPoints;
+end;
+
 { The vertices in a row: x, y, z, nx, ny, nz - six single-precision numbers to a
   vertex, exactly as TVertex holds them. Returns the number of numbers WRITTEN. }
 function WVerts(Buffer: PSingle; Capacity: LongInt): LongInt; cdecl;
@@ -188,7 +197,8 @@ exports
   WIdx   name 'idx',
   WInfo  name 'info',
   WNote  name 'note',
-  WSide  name 'side';
+  WSide  name 'side',
+  WFastPoints name 'fast_points';
 
 begin
 end.

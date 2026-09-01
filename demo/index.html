@@ -2871,9 +2871,16 @@ window.__nshB = {
       s += String.fromCharCode.apply(null, out.subarray(i, i + 8192));
     return { w: w, h: h, data: btoa(s) };
   },
+  /* fast is how many points of a mesh the engine computed with its fast back
+     end rather than by walking the parsed formula. A check that only compares
+     pictures cannot tell a fast path that agrees from one that quietly retired
+     itself and left the slow one agreeing with itself; this number is the
+     difference between the two. Minus one means the engine is too old to say. */
   state: () => ({ az: az, el: el, camx: camX, camy: camY, camh: camH,
                   dom: declDom.slice(), used: usedDom.slice(),
                   bz: boxZ(), mode: drawIn, shade: shade,
+                  fast: (E && E.raw && E.raw.fast_points)
+                          ? E.raw.fast_points() : -1,
                   ready: coreOk === true, info: meshInfo })
 };
 

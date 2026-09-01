@@ -392,7 +392,7 @@
         <div class="plate">
           <canvas id="dmC" width="880" height="620" aria-label="the surface"></canvas>
           <div id="dmVeil" class="veil">
-            <button id="dmBoot" type="button">Load the engine (3.7 MB)</button>
+            <button id="dmBoot" type="button">Load the engine (3.8 MB)</button>
             <p class="note" id="dmWhy">The whole parser and mesh builder,
             compiled once. Nothing is fetched after that.</p>
           </div>
@@ -420,12 +420,17 @@
         without opening a window, while here the browser draws with WebGL2 - the
         same shader, carried over from GLSL 330 to GLSL ES 300.</p>
 
-        <p><b>And one thing is genuinely missing.</b> The desktop library
-        compiles a formula to machine code and evaluates a whole row of the mesh
-        in one call. WebAssembly has no executable memory at all, so that cannot
-        be there; the same parser runs as an interpreter instead, a point at a
-        time. It is the reason a heavy formula takes tenths of a second here and
-        milliseconds there.</p>
+        <p><b>And one thing is still missing.</b> The desktop library compiles
+        a formula to machine code. WebAssembly has no executable memory at all,
+        so that cannot be here. What is here instead is the same reading and the
+        same decoding with a different back end: the decoded formula becomes a
+        short program over a stack of numbers, and that program is walked. On a
+        mesh of 184 nodes a side, <span class="frag">sin(x)*cos(y)</span> takes
+        18 ms to build against about 11 for a whole frame in the library. A
+        formula built from anything that back end has not been taught &mdash; a
+        power, a remainder, a call of two arguments &mdash; goes back to walking
+        the parsed formula a point at a time, and the same mesh then costs 88
+        ms.</p>
 
         <p class="note">Drag to turn. The domain is fixed at
         <span class="frag">-2..2</span> on both axes, and the quality is the
@@ -655,9 +660,9 @@ import { loadEngine } from "./demo/nsh_engine.js";
       build($("dmF").value);
     } catch (e) {
       b.disabled = false;
-      b.textContent = "Load the engine (3.7 MB)";
+      b.textContent = "Load the engine (3.8 MB)";
       why.textContent = (e && e.name === "AbortError")
-        ? "the engine did not arrive within thirty seconds. The file is 3.7 MB " +
+        ? "the engine did not arrive within thirty seconds. The file is 3.8 MB " +
           "and it is served from this same site, so something between the " +
           "browser and the server is holding it - a proxy, an extension, or a " +
           "connection that never finished."

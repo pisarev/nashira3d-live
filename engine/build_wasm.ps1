@@ -70,6 +70,14 @@ Remove-Item "$Out/*" -Recurse -Force -ErrorAction SilentlyContinue
 $Wasm = Join-Path $Www 'nshwasm.wasm'
 if (Test-Path $Wasm) { Remove-Item $Wasm -Force }
 
+# The decoder of the jit is on the path, and nothing else from that directory
+# is meant to arrive with it. It generates no machine code: it takes the byte
+# code the parser produces and reads it back as plain steps, which nsh_fasteval
+# turns into a short program over a stack of doubles - the part machine code
+# plays where there is no machine code to be had.
+# Keeping the whole directory off the path used to be the guard, and it was a
+# guard by hope: nothing arrived while nobody referred to it. The check after
+# the build replaces it with a fact.
 # NOFORMS/NOGRAPHICS are the same headless definitions the Linux build uses:
 # without them Thread.pas drags in Forms, which wasm has not got and does not
 # need. NSH_NO_JIT switches nsh_surface over to the interpreter: there is no
@@ -80,10 +88,29 @@ if (Test-Path $Wasm) { Remove-Item $Wasm -Force }
 & $Fpc -Pwasm32 -Twasip1 -Mdelphi -O2 -Sh -Xs -vw- `
     -dNOFORMS -dNOGRAPHICS -dNSH_NO_JIT `
     ("-Fu$Here") ("-Fu$Core/core") `
-    ("-Fu$Parser/src") ("-Fu$Parser/src/compat") ("-Fi$Parser/src") `
+    ("-Fu$Parser/src") ("-Fu$Parser/src/compat") ("-Fu$Parser/jit") `
+    ("-Fi$Parser/src") `
     ("-FU$Out") ("-FE$Out") `
     (Join-Path $Here 'nshwasm.pas')
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# WHAT CAME IN FROM THE JIT, checked rather than assumed. Only the decoder is
+# wanted; the emitter of machine code, its executable memory and its parser have
+# no business in a module for a browser, and a reference added by accident would
+# bring them in without a word. The compiler leaves a unit file for everything it
+# built, so the answer is on disk.
+$Forbidden = @('parsejit.memory', 'parsejit.codegen', 'parsejit.executor',
+               'parsejit.parser')
+$Built = Get-ChildItem $Out -File -ErrorAction SilentlyContinue |
+         ForEach-Object { $_.BaseName.ToLower() }
+$Sneaked = $Built | Where-Object { $Forbidden -contains $_ } | Sort-Object -Unique
+if ($Sneaked) {
+    throw ("the machine code side of the jit reached the browser build: " +
+           ($Sneaked -join ', '))
+}
+if (-not ($Built -contains 'parsejit.decoder')) {
+    throw "the decoder did not build - nsh_fasteval cannot have been compiled"
+}
 
 # The name of the finished module depends on the version of the compiler: some
 # put it out without an extension, others already with .wasm. Guessing will not
