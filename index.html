@@ -4,6 +4,11 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Nashira3D - surfaces from formulas</title>
 <meta name="description" content="A library that draws three-dimensional surface plots straight from a formula, on the GPU, without opening a window.">
+<!-- The icon is drawn here rather than fetched. A browser asks for
+     /favicon.ico on its own, and without this line every visitor's
+     console opens on a 404 - a poor first impression for a page whose
+     whole argument is that the thing works. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2314202e'/%3E%3Cpath d='M4 22c4-9 8 4 12-5s8 6 12-3' fill='none' stroke='%236fd3c7' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
   /* ------------------------------------------------------------------
      Paper and pens. Eight tones for the sheet, five for the pens, and no
@@ -557,7 +562,9 @@
 (() => {
   const $ = id => document.getElementById(id);
   const cv = $("dmC"), stat = $("dmStat");
-  let gl = null, eng = null, mem = null, prog = null, vao = null;
+  let gl = null, eng = null, mem = null, prog = null, vao = null, bgProg = null;
+  let lineProg = null, lineVao = null, lineCount = 0, showLines = true;
+  let gridEbo = null, gridCount = 0, showLabels = true;
   let vbo = null, ebo = null, idxCount = 0, info = [0, 0, 0, 0];
   let az = 0.9, el = 0.45, dragging = false, lastX = 0, lastY = 0;
 
@@ -584,6 +591,165 @@
     proc_exit: c => { throw new Error("the engine exited with " + c); },
     random_get: (p, n) => { crypto.getRandomValues(new Uint8Array(mem.buffer, p, n)); return OK; }
   };
+
+  /* The background the library draws: a gradient with a vignette, not a flat
+     fill. It comes from BG_SRC and BG_VERT_SRC/BG_FRAG_SRC in nsh_render.pas,
+     carried over unchanged apart from the dialect line. A full-screen triangle
+     is generated from gl_VertexID, so it needs no buffer of its own. */
+  /* The line program of the library, carried over from LINE_VERT_SRC and
+     LINE_FRAG_SRC in nsh_render.pas. The tint fades with depth so that the far
+     edges of the box do not compete with the surface for attention. */
+  /* ---- tick labels -------------------------------------------------------
+     The library keeps its own bitmap font: seventeen glyphs of five by seven
+     bits, drawn into a six by nine cell. The stretch is carried over as it is,
+     not cleaned up - sampled NEAREST, some columns double and some rows repeat,
+     and that is what the picture actually looks like. Digits, minus, dot, e and
+     the three axis letters are all the alphabet a tick label ever needs. */
+  const GLYPH_W = 5, GLYPH_H = 7, GLYPH_N = 17, CELL_W = 6, CELL_H = 9;
+  const BOX_XY = 1.0, BOX_Z = 1.0, DIV_COUNT = 5;
+  const FONT = [
+    [14, 17, 19, 21, 25, 17, 14],   /* 0 */
+    [ 4, 12,  4,  4,  4,  4, 14],   /* 1 */
+    [14, 17,  1,  2,  4,  8, 31],   /* 2 */
+    [31,  2,  4,  2,  1, 17, 14],   /* 3 */
+    [ 2,  6, 10, 18, 31,  2,  2],   /* 4 */
+    [31, 16, 30,  1,  1, 17, 14],   /* 5 */
+    [ 6,  8, 16, 30, 17, 17, 14],   /* 6 */
+    [31,  1,  2,  4,  8,  8,  8],   /* 7 */
+    [14, 17, 17, 14, 17, 17, 14],   /* 8 */
+    [14, 17, 17, 15,  1,  2, 12],   /* 9 */
+    [ 0,  0,  0, 31,  0,  0,  0],   /* - */
+    [ 0,  0,  0,  0,  0, 12, 12],   /* . */
+    [ 0,  0, 14, 17, 31, 16, 14],   /* e */
+    [ 0,  0, 17, 10,  4, 10, 17],   /* x */
+    [ 0,  0, 17, 17, 15,  1, 14],   /* y */
+    [ 0,  0, 31,  2,  4,  8, 31],   /* z */
+    [ 0,  0, 31,  0, 31,  0,  0]    /* = */
+  ];
+  const glyphOf = c => {
+    if (c >= "0" && c <= "9") return c.charCodeAt(0) - 48;
+    const k = "-.,=eExXyYzZ".indexOf(c);
+    if (k < 0) return -1;
+    return [10, 11, 11, 16, 12, 12, 13, 13, 14, 14, 15, 15][k];
+  };
+
+  let txtProg = null, txtTex = null, txtVao = null, txtVbo = null;
+
+  const TEXT_VS = `#version 300 es
+    layout(location = 0) in vec3 aAnchor;
+    layout(location = 1) in vec2 aOffset;
+    layout(location = 2) in vec2 aUV;
+    uniform mat4 uMVP;
+    uniform vec2 uPxToNdc;
+    out vec2 vUV;
+    void main() {
+      vec4 p = uMVP * vec4(aAnchor, 1.0);
+      p /= p.w;
+      /* Snap to a whole pixel. The anchor is a projected box corner and lands
+         wherever it lands; at a fractional position the five-by-seven font
+         breaks up - the library measured 38 per cent of letter pixels turning
+         into half-tones before this line was added. The offset is rounded too:
+         half a cell height is -4.5, and leaving it alone would spend the whole
+         gain on that one number. */
+      vec2 sc = floor(p.xy / uPxToNdc + 0.5) + floor(aOffset + 0.5);
+      gl_Position = vec4(sc * uPxToNdc, p.z, 1.0);
+      vUV = aUV;
+    }`;
+  const TEXT_FS = `#version 300 es
+    precision highp float;
+    in vec2 vUV;
+    uniform sampler2D uFont;
+    out vec4 fColor;
+    void main() {
+      float a = texture(uFont, vUV).r;
+      if (a < 0.5) discard;
+      fColor = vec4(0.85, 0.88, 0.94, 1.0);
+    }`;
+
+  /* The number under a tick. Three significant digits, and a plain exponent
+     for what does not fit - the library's own rule, spelled out the same way. */
+  const fmtTick = v => {
+    if (Number.isNaN(v)) return "?";
+    if (!Number.isFinite(v)) return v > 0 ? "inf" : "-inf";
+    const a = Math.abs(v);
+    if (a < 1e-10) return "0";
+    if (a < 1e-3 || a >= 1e5)
+      return v.toExponential(1).replace("e+", "e");
+    return String(Number(v.toPrecision(3)));
+  };
+
+  const LINE_VS = `#version 300 es
+    layout(location = 0) in vec3 aPos;
+    uniform mat4 uMVP;
+    out float vDep;
+    void main() {
+      vec4 p = uMVP * vec4(aPos, 1.0);
+      vDep = p.z / p.w;
+      gl_Position = p;
+    }`;
+
+  const LINE_FS = `#version 300 es
+    precision highp float;
+    in float vDep;
+    uniform vec4 uTint;
+    out vec4 fColor;
+    void main() {
+      float t = clamp(vDep * 0.5 + 0.5, 0.0, 1.0);
+      float k = mix(1.0, 0.32, smoothstep(0.55, 1.0, t));
+      fColor = vec4(uTint.rgb * k, uTint.a);
+    }`;
+
+  const BG_SRC = `
+    vec3 bgAt(vec2 uv) {
+      vec3 top = vec3(0.070, 0.092, 0.128);
+      vec3 bot = vec3(0.026, 0.035, 0.052);
+      vec3 c = mix(bot, top, smoothstep(0.0, 1.0, uv.y));
+      vec2 d = uv - 0.5;
+      c *= 1.0 - 0.55 * dot(d, d);
+      return c;
+    }`;
+
+  /* The box: twelve edges and the tick marks, exactly as BuildAxes builds them
+     in nsh_render.pas. The constants are its constants - BOX_XY 1, BOX_Z 1,
+     five divisions, tick 0.04 - and the vertices sit in the same normalised
+     box the mesh does, so the model scale in the MVP carries them along. */
+  const axesSegments = () => {
+    const B = 1.0, Z = 1.0, DIV = 5, TICK = 0.04, v = [];
+    const seg = (x1, y1, z1, x2, y2, z2) => v.push(x1, y1, z1, x2, y2, z2);
+    for (const z of [-Z, Z]) {
+      seg(-B, -B, z,  B, -B, z);
+      seg( B, -B, z,  B,  B, z);
+      seg( B,  B, z, -B,  B, z);
+      seg(-B,  B, z, -B, -B, z);
+    }
+    seg(-B, -B, -Z, -B, -B, Z);
+    seg( B, -B, -Z,  B, -B, Z);
+    seg( B,  B, -Z,  B,  B, Z);
+    seg(-B,  B, -Z, -B,  B, Z);
+    for (let i = 1; i < DIV; i++) {
+      const tt = -B + 2 * B * i / DIV;
+      seg(tt, -B, -Z, tt, -B - TICK, -Z);
+      seg(-B, tt, -Z, -B - TICK, tt, -Z);
+      const tz = -Z + 2 * Z * i / DIV;
+      seg(-B, -B, tz, -B - TICK, -B - TICK, tz);
+    }
+    return new Float32Array(v);
+  };
+
+  const BG_VS = `#version 300 es
+    out vec2 vUv;
+    void main() {
+      vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+      vUv = p;
+      gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+    }`;
+
+  const BG_FS = `#version 300 es
+    precision highp float;
+    ${BG_SRC}
+    in vec2 vUv;
+    out vec4 fColor;
+    void main() { fColor = vec4(bgAt(vUv), 1.0); }`;
 
   const VS = `#version 300 es
     layout(location = 0) in vec3 aPos;
@@ -701,6 +867,88 @@
   const HALF = 2.0;                 // the domain is -2..2, so the half is 2
   const QUALITY = 50;               // the library's own default
 
+  /* Where every label goes. Carried over from the library step for step: the
+     edge that reads lowest on screen takes the x numbers, the same test on the
+     other pair takes y, and z hangs on the leftmost of the four uprights. */
+  const labelVerts = (mvp, w, h) => {
+    const V = [];
+    const add = (text, wx, wy, wz, pxX, pxY) => {
+      let x0 = pxX;
+      for (const c of text) {
+        const g = glyphOf(c);
+        if (g >= 0) {
+          const u0 = g / GLYPH_N, u1 = (g + 1) / GLYPH_N;
+          V.push(wx, wy, wz, x0,          pxY,          u0, 1,
+                 wx, wy, wz, x0 + CELL_W, pxY,          u1, 1,
+                 wx, wy, wz, x0,          pxY + CELL_H, u0, 0,
+                 wx, wy, wz, x0 + CELL_W, pxY,          u1, 1,
+                 wx, wy, wz, x0 + CELL_W, pxY + CELL_H, u1, 0,
+                 wx, wy, wz, x0,          pxY + CELL_H, u0, 0);
+        }
+        x0 += CELL_W;
+      }
+    };
+    const proj = (x, y, z) => {
+      const cx = mvp[0] * x + mvp[4] * y + mvp[8] * z + mvp[12];
+      const cy = mvp[1] * x + mvp[5] * y + mvp[9] * z + mvp[13];
+      let cw = mvp[3] * x + mvp[7] * y + mvp[11] * z + mvp[15];
+      if (Math.abs(cw) < 1e-9) cw = 1e-9;
+      return [cx / cw, cy / cw];
+    };
+    const midY = (x, y) => proj(x, y, -BOX_Z)[1];
+    const edgeY = midY(0, -BOX_XY) <= midY(0, BOX_XY) ? -BOX_XY : BOX_XY;
+    const edgeX = midY(-BOX_XY, 0) <= midY(BOX_XY, 0) ? -BOX_XY : BOX_XY;
+    let bestX = 1e30, cornX = -BOX_XY, cornY = -BOX_XY;
+    for (let i = 0; i < 4; i++) {
+      const cx = BOX_XY * (1 - 2 * (i & 1));
+      const cy = BOX_XY * (1 - 2 * ((i >> 1) & 1));
+      const v = proj(cx, cy, 0)[0];
+      if (v < bestX) { bestX = v; cornX = cx; cornY = cy; }
+    }
+    /* A label is kept with an eye on its neighbour. When an edge points nearly
+       along the line of sight all five of its numbers pile into one spot. The
+       two end labels are never dropped: an axis whose end is unlabelled looks
+       shorter than it is, and that is worse than a crowd. Distance is measured
+       in pixels, because letters keep their size on screen. */
+    const lastX = [0, 0], lastY = [0, 0], lastOk = [false, false];
+    const keep = (axis, idx, x, y, chars) => {
+      const p = proj(x, y, -BOX_Z);
+      const px = (p[0] * 0.5 + 0.5) * w, py = (1 - (p[1] * 0.5 + 0.5)) * h;
+      if (idx === 0 || idx === DIV_COUNT || !lastOk[axis]) {
+        lastX[axis] = px; lastY[axis] = py; lastOk[axis] = true;
+        return true;
+      }
+      const ok = Math.abs(px - lastX[axis]) >= CELL_W * (chars + 1)
+              || Math.abs(py - lastY[axis]) >= CELL_H * 1.4;
+      if (ok) { lastX[axis] = px; lastY[axis] = py; }
+      return ok;
+    };
+    for (let i = 0; i <= DIV_COUNT; i++) {
+      const tt = -BOX_XY + 2 * BOX_XY * i / DIV_COUNT;
+      let s = fmtTick(-HALF + 2 * HALF * i / DIV_COUNT);
+      if (keep(0, i, tt, edgeY, s.length))
+        add(s, tt, edgeY, -BOX_Z, -CELL_W * s.length / 2, -CELL_H - 5);
+      s = fmtTick(-HALF + 2 * HALF * i / DIV_COUNT);
+      if (keep(1, i, edgeX, tt, s.length))
+        add(s, edgeX, tt, -BOX_Z, -CELL_W * s.length / 2, -CELL_H - 5);
+    }
+    /* z gets two divisions, not five: the box is a third of the height and
+       five numbers there run together. Taking every other one of the five is
+       not an option - the top value would go unlabelled, and an axis that lies
+       about its own span is worse than one with no numbers at all. */
+    for (let i = 0; i <= 2; i++) {
+      const s = fmtTick(info[0] + (info[1] - info[0]) * i / 2);
+      add(s, cornX, cornY, -BOX_Z + 2 * BOX_Z * i / 2,
+          -CELL_W * s.length - 10, -CELL_H / 2);
+    }
+    /* The axis letter sits BEYOND the end of its edge: in the middle it lands
+       on top of a tick number. */
+    add("x", BOX_XY * 1.18, edgeY, -BOX_Z, -CELL_W / 2, -CELL_H - 5);
+    add("y", edgeX, BOX_XY * 1.18, -BOX_Z, -CELL_W / 2, -CELL_H - 5);
+    add("z", cornX, cornY, BOX_Z * 1.35, -CELL_W - 12, -CELL_H / 2);
+    return new Float32Array(V);
+  };
+
   const draw = () => {
     if (!gl || !idxCount) return;
     const w = cv.width, h = cv.height;
@@ -712,12 +960,34 @@
                          parseInt(m[3], 16) / 255, 1);
     else gl.clearColor(0.91, 0.92, 0.89, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    /* The backdrop goes down first and takes no part in the depth buffer: it
+       is behind everything by construction, and testing it against depth would
+       only invite a driver to disagree. */
+    if (bgProg) {
+      gl.disable(gl.DEPTH_TEST);
+      gl.useProgram(bgProg);
+      gl.bindVertexArray(vao);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
     gl.enable(gl.DEPTH_TEST);
 
     const ce = Math.cos(el), se = Math.sin(el);
     const eye = [DIST * ce * Math.cos(az), DIST * ce * Math.sin(az), DIST * se];
-    const mvp = mul(perspective(0.9, w / h, 0.05, 40),
-                    lookAt(eye, [0, 0, 0], [0, 0, 1]));
+    /* The box proportions belong in the model matrix, not in the shader: the
+       vertex shader passes aPos to uMVP untouched and uses uScale only for
+       the world position it hands to the lighting. Leaving the scale out here
+       drew the surface at a box of 1.0 in height where the library draws 0.3
+       - three times too tall, and the gate that compares frames said so in
+       pixels before anyone said it in words. */
+    const scale = (sx, sy, sz) => {
+      const o = new Float32Array(16);
+      o[0] = sx; o[5] = sy; o[10] = sz; o[15] = 1;
+      return o;
+    };
+    const mvp = mul(mul(perspective(0.9, w / h, 0.05, 40),
+                        lookAt(eye, [0, 0, 0], [0, 0, 1])),
+                    scale(BOX[0], BOX[1], BOX[2]));
     gl.useProgram(prog);
     const U = n => gl.getUniformLocation(prog, n);
     gl.uniformMatrix4fv(U("uMVP"), false, mvp);
@@ -728,14 +998,74 @@
                  Math.sin(2.2) * Math.cos(0.9), Math.sin(0.9));
     gl.uniform3f(U("uEye"), eye[0], eye[1], eye[2]);
     gl.uniform1i(U("uShade"), 2);
-    // The step of the contour lines: the same 1-2-5 rule the library uses.
-    const raw = zspan / 14;
-    const p10 = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1e-12))));
-    const step = [1, 2, 5, 10].reduce((b, k) =>
-      Math.abs(Math.log(k * p10 / raw)) < Math.abs(Math.log(b / raw)) ? k * p10 : b, p10);
+    /* The step of the contour lines, and this time it really is the rule the
+       library uses: NiceStep in nsh_ticks.pas takes the span over FIFTEEN, not
+       fourteen, and picks the nearest of 1, 2, 5 across three decades by the
+       distance of logarithms. The old fourteen agreed by luck on the sample
+       formulas and would have parted company on others. */
+    const raw = zspan / 15;
+    const e = Math.floor(Math.log10(Math.max(raw, 1e-12)));
+    let step = 1, best = Infinity;
+    for (let k = -1; k <= 1; k++)
+      for (const m of [1, 2, 5]) {
+        const cand = m * Math.pow(10, e + k);
+        const d = Math.abs(Math.log(cand) - Math.log(raw));
+        if (cand > 0 && d < best) { best = d; step = cand; }
+      }
     gl.uniform3f(U("uCont"), (info[0] + info[1]) / 2, zspan / 2, step);
     gl.bindVertexArray(vao);
+    /* The surface is pushed one step back in depth: without it the grid lines,
+       lying in the very same places, fight it for pixels and shimmer. */
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.polygonOffset(1.0, 1.0);
     gl.drawElements(gl.TRIANGLES, idxCount, gl.UNSIGNED_INT, 0);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+
+    if (showLines && lineProg && gridCount > 0) {
+      gl.useProgram(lineProg);
+      gl.uniformMatrix4fv(gl.getUniformLocation(lineProg, "uMVP"), false, mvp);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gridEbo);
+      gl.enable(gl.BLEND);
+      /* Only the colour is blended. A plain blendFunc would touch the alpha
+         channel as well, and a line at 0.3 would leave the frame with 152
+         where 255 belongs - the frame would stop being opaque. */
+      gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
+      gl.uniform4f(gl.getUniformLocation(lineProg, "uTint"), 0.85, 0.93, 1.00, 0.30);
+      gl.drawElements(gl.LINES, gridCount, gl.UNSIGNED_INT, 0);
+      gl.disable(gl.BLEND);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
+    }
+
+    /* The box goes on last, with the tint the library gives it. */
+    if (showLines && lineProg && lineCount > 0) {
+      gl.useProgram(lineProg);
+      gl.uniformMatrix4fv(gl.getUniformLocation(lineProg, "uMVP"), false, mvp);
+      gl.uniform4f(gl.getUniformLocation(lineProg, "uTint"), 0.62, 0.70, 0.82, 1.0);
+      gl.bindVertexArray(lineVao);
+      gl.drawArrays(gl.LINES, 0, lineCount);
+      gl.bindVertexArray(null);
+    }
+
+    /* The numbers go on top of everything with depth off, as the library puts
+       them: a label belongs to the frame, not to the scene. */
+    if (showLabels && txtProg && idxCount) {
+      const tv = labelVerts(mvp, w, h);
+      if (tv.length) {
+        gl.disable(gl.DEPTH_TEST);
+        gl.useProgram(txtProg);
+        gl.uniformMatrix4fv(gl.getUniformLocation(txtProg, "uMVP"), false, mvp);
+        gl.uniform2f(gl.getUniformLocation(txtProg, "uPxToNdc"), 2 / w, 2 / h);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, txtTex);
+        gl.uniform1i(gl.getUniformLocation(txtProg, "uFont"), 0);
+        gl.bindVertexArray(txtVao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, txtVbo);
+        gl.bufferData(gl.ARRAY_BUFFER, tv, gl.DYNAMIC_DRAW);
+        gl.drawArrays(gl.TRIANGLES, 0, tv.length / 7);
+        gl.bindVertexArray(null);
+        gl.enable(gl.DEPTH_TEST);
+      }
+    }
   };
 
   const note = () => {
@@ -790,6 +1120,34 @@
     gl.bufferData(gl.ARRAY_BUFFER, v, gl.STATIC_DRAW);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+
+    /* The grid over the surface, thinned exactly as RndUpload thins it: every
+       twelfth node a side, and a segment dropped whenever either end fell on a
+       hole - a line drawn across a gap would claim there is surface where
+       there is none. */
+    const side = info[2] | 0;
+    const g = [];
+    if (side > 1) {
+      const step = Math.max(1, (side - 1) / 12 | 0);
+      const finite = k => Number.isFinite(raw[k * 6 + 2]);
+      for (let j = 0; j < side; j += step)
+        for (let i = 0; i < side - 1; i++) {
+          const a = j * side + i;
+          if (finite(a) && finite(a + 1)) g.push(a, a + 1);
+        }
+      for (let i = 0; i < side; i += step)
+        for (let j = 0; j < side - 1; j++) {
+          const a = j * side + i;
+          if (finite(a) && finite(a + side)) g.push(a, a + side);
+        }
+    }
+    gridCount = g.length;
+    if (gridCount > 0) {
+      if (!gridEbo) gridEbo = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gridEbo);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(g), gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
+    }
     idxCount = ic;
 
     stat.textContent = cnt.toLocaleString("en") + " vertices, " +
@@ -849,6 +1207,86 @@
       if (!gl.getProgramParameter(p, gl.LINK_STATUS))
         throw new Error(gl.getProgramInfoLog(p));
       prog = p;
+
+      /* The background program is built the same way, and its failure is not
+         fatal: without it the canvas keeps the flat clear colour and the plot
+         still appears. A demo that shows the surface on the wrong backdrop is
+         worth more than a demo that shows nothing. */
+      try {
+        const bp = gl.createProgram();
+        gl.attachShader(bp, compile(gl.VERTEX_SHADER, BG_VS));
+        gl.attachShader(bp, compile(gl.FRAGMENT_SHADER, BG_FS));
+        gl.linkProgram(bp);
+        if (gl.getProgramParameter(bp, gl.LINK_STATUS)) bgProg = bp;
+      } catch (e) {
+        bgProg = null;
+      }
+
+      /* The line program, and its failure is not fatal either: without it the
+         plot loses its box and keeps its surface. */
+      try {
+        const lp = gl.createProgram();
+        gl.attachShader(lp, compile(gl.VERTEX_SHADER, LINE_VS));
+        gl.attachShader(lp, compile(gl.FRAGMENT_SHADER, LINE_FS));
+        gl.linkProgram(lp);
+        if (gl.getProgramParameter(lp, gl.LINK_STATUS)) {
+          lineProg = lp;
+          const segs = axesSegments();
+          lineCount = segs.length / 3;
+          lineVao = gl.createVertexArray();
+          gl.bindVertexArray(lineVao);
+          const lb = gl.createBuffer();
+          gl.bindBuffer(gl.ARRAY_BUFFER, lb);
+          gl.bufferData(gl.ARRAY_BUFFER, segs, gl.STATIC_DRAW);
+          gl.enableVertexAttribArray(0);
+          gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 12, 0);
+          gl.bindVertexArray(null);
+        }
+      } catch (e) {
+        lineProg = null;
+      }
+
+      /* The text program. Failing it costs the numbers on the axes and nothing
+         else, so it degrades the same way the other two do. */
+      try {
+        const tp = gl.createProgram();
+        gl.attachShader(tp, compile(gl.VERTEX_SHADER, TEXT_VS));
+        gl.attachShader(tp, compile(gl.FRAGMENT_SHADER, TEXT_FS));
+        gl.linkProgram(tp);
+        if (gl.getProgramParameter(tp, gl.LINK_STATUS)) {
+          txtProg = tp;
+          /* One atlas row, seventeen glyphs across, one byte a texel. */
+          const pix = new Uint8Array(GLYPH_N * GLYPH_W * GLYPH_H);
+          for (let g = 0; g < GLYPH_N; g++)
+            for (let row = 0; row < GLYPH_H; row++)
+              for (let col = 0; col < GLYPH_W; col++)
+                pix[row * (GLYPH_N * GLYPH_W) + g * GLYPH_W + col] =
+                  (FONT[g][row] >> (GLYPH_W - 1 - col)) & 1 ? 255 : 0;
+          txtTex = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, txtTex);
+          gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, GLYPH_N * GLYPH_W, GLYPH_H, 0,
+                        gl.RED, gl.UNSIGNED_BYTE, pix);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          txtVao = gl.createVertexArray();
+          txtVbo = gl.createBuffer();
+          gl.bindVertexArray(txtVao);
+          gl.bindBuffer(gl.ARRAY_BUFFER, txtVbo);
+          gl.enableVertexAttribArray(0);
+          gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 28, 0);
+          gl.enableVertexAttribArray(1);
+          gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 28, 12);
+          gl.enableVertexAttribArray(2);
+          gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 28, 20);
+          gl.bindVertexArray(null);
+        }
+      } catch (e) {
+        txtProg = null;
+      }
+
       vao = gl.createVertexArray();
       gl.bindVertexArray(vao);
       vbo = gl.createBuffer(); ebo = gl.createBuffer();
@@ -870,6 +1308,45 @@
           "connection that never finished."
         : "the engine did not load: " + String((e && e.message) || e);
     }
+  };
+
+  /* A seam for the gate, and the reason it exists.
+
+     The frame this page draws is compared, pixel by pixel, against the frame
+     the library draws from the same formula and the same camera. Two frames of
+     two different views prove nothing, so the gate has to be able to set the
+     view exactly - and the camera lives in variables of this closure, which
+     nothing outside can reach.
+
+     What is exposed is only what a person already does with the mouse: name a
+     view, redraw, read back the frame. Nothing here changes what the page does
+     when nobody is watching. */
+  window.__nsh = {
+    view: (a, e) => { az = a; el = e; if (eng) draw(); },
+    /* Lets the gate ask for a frame without the box, so that the pixels the
+       box touches can be found by measurement rather than guessed at. Nothing
+       a viewer sees depends on it: the switch is back on before the next
+       redraw a person triggers. */
+    lines: on => { showLines = !!on; if (eng) draw(); },
+    labels: on => { showLabels = !!on; if (eng) draw(); },
+    redraw: () => { if (eng) draw(); },
+    frame: () => {
+      if (!gl) return null;
+      const w = cv.width, h = cv.height;
+      const px = new Uint8Array(w * h * 4);
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      /* readPixels hands back rows bottom up; the library writes them top
+         down. Flipping here keeps the comparison about pixels rather than
+         about which end of the buffer each side calls first. */
+      const out = new Uint8Array(w * h * 4);
+      for (let y = 0; y < h; y++)
+        out.set(px.subarray((h - 1 - y) * w * 4, (h - y) * w * 4), y * w * 4);
+      let s = "";
+      for (let i = 0; i < out.length; i += 8192)
+        s += String.fromCharCode.apply(null, out.subarray(i, i + 8192));
+      return { w: w, h: h, data: btoa(s) };
+    },
+    state: () => ({ az: az, el: el, ready: !!eng, idx: idxCount, info: info })
   };
 
   $("dmGo").onclick = () => { if (eng) build($("dmF").value); };
