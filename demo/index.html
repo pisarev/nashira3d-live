@@ -484,8 +484,8 @@ window.__nshModsReady({ createRenderer, loadEngine });
   <label class="ck" for="ax"><input type="checkbox" id="ax" checked><span>draw the bounding box</span></label>
   <label for="motion">while moving</label>
   <select id="motion">
-    <option value="full" selected>Full &mdash; never drop quality</option>
-    <option value="auto">Adaptive &mdash; drop only if slow</option>
+    <option value="full">Full &mdash; never drop quality</option>
+    <option value="auto" selected>Adaptive &mdash; drop only if slow</option>
     <option value="draft">Draft &mdash; always 0.6&times;</option>
   </select>
   <div class="note" id="mnote"></div>
@@ -916,13 +916,28 @@ function frameSize() {
 function paintMotionNote() {
   const mode = $("motion").value, t = typicalMs(), box = $("mnote");
   box.className = "note";
-  if (mode === "full") { box.textContent =
-    "Quality never drops. If the view lags behind the mouse, lower the frame resolution."; return; }
-  if (mode === "draft") { box.textContent =
-    "Always coarse while moving, sharp again on release."; return; }
+  /* THE NOTE NAMES WHAT ACTUALLY GIVES WAY, and it is not the same thing in
+     the two modes. In the box the mesh is not rebuilt when the camera moves, so
+     the frame is the whole cost; across the view the mesh is rebuilt every time
+     and it is the cost, measured at 68 ms of a 95 ms frame. The note used to
+     advise lowering the frame resolution in both, which across the view buys
+     nothing at all. */
+  const sheet = (drawIn === "plane");
+  if (mode === "full") { box.textContent = sheet
+    ? "Nothing gives way while you move, so the mesh is rebuilt at full size for "
+      + "every movement of the camera. Lowering the frame resolution will not "
+      + "help here: the cost is the mesh, not the pixels."
+    : "Quality never drops. If the view lags behind the mouse, lower the frame "
+      + "resolution."; return; }
+  if (mode === "draft") { box.textContent = sheet
+    ? "Coarse while moving, sharp again on release: the mesh drops to 0.6 of the "
+      + "nodes a side, which is a third of them, and so does the frame."
+    : "Always coarse while moving, sharp again on release."; return; }
   box.textContent = t
     ? "Typical full frame " + t.toFixed(0) + " ms \u2014 " +
-      (t > MOTION_BUDGET ? "dropping to 0.6\u00d7 while moving." : "fast enough, quality kept.")
+      (t > MOTION_BUDGET
+        ? "dropping to 0.6\u00d7 while moving" + (sheet ? ", mesh and frame both." : ".")
+        : "fast enough, quality kept.")
     : "Measuring\u2026";
 }
 
@@ -1650,7 +1665,17 @@ async function coreFetch() {
     const key = f + "|" + useDom.join(",") + "|" + q
               + (plane ? "|" + [camX, camY, camH, az, el].join(",") : "");
     const t0 = performance.now();
-    if (key !== meshKey) {
+    /* WHILE MOVING, THE MESH GIVES WAY FIRST. On the endless sheet it is
+       rebuilt for every movement of the camera, and it is the mesh that costs:
+       measured on this page at 184 nodes a side, 68 ms of a 95 ms frame, while
+       the drawing itself takes a few. Dropping the resolution of the frame buys
+       nothing here, and that is what the note used to advise.
+       The factor is the SAME one the frame gets, so that one control governs
+       one thing: 0.6 of the nodes a side is 0.36 of them altogether, and 68 ms
+       becomes 25. Full quality returns the moment the mouse is let go. */
+    const nodes = Math.max(8, Math.round(
+      sideOf(q) * ((plane && drag) ? motionDrop() : 1)));
+    if (key + "|" + nodes !== meshKey) {
       /* THE SCALE OF THE RELIEF COMES FROM THE DECLARED REGION, and is then
          frozen. On the sheet the region in view changes with every step, and a
          scale taken from it would change along with it: the same hill would be
@@ -1669,13 +1694,12 @@ async function coreFetch() {
         zFreeze = [(z.info[0] + z.info[1]) / 2, z.info[1] - z.info[0]];
         zArmed = true;
       }
-      const n = sideOf(q);
       const m = plane
         ? E.buildAt(f,
                     axisLines(useDom[0], useDom[1],
-                              (useDom[2] + useDom[3]) / 2, true, n),
+                              (useDom[2] + useDom[3]) / 2, true, nodes),
                     axisLines(useDom[2], useDom[3],
-                              (useDom[0] + useDom[1]) / 2, false, n))
+                              (useDom[0] + useDom[1]) / 2, false, nodes))
         : E.build(f, useDom[0], useDom[1], useDom[2], useDom[3], q);
       if (m.error) { errBox.textContent = m.error; return; }
       if (!zFreeze) {
@@ -1704,7 +1728,7 @@ async function coreFetch() {
         }
       }
       R.upload(m.raw, m.idx, m.info, zFreeze);
-      meshKey = key;
+      meshKey = key + "|" + nodes;
       meshInfo = m.info;
       meshMs = m.ms;
       $("sv").textContent = m.info[2];
