@@ -1651,10 +1651,12 @@ function tiltStand(v) {
 /* SOMETHING IN IT HAS TO BE ABLE TO YIELD A VALUE. A lone dot parses, builds a
    mesh and draws a flat plane at nought without a word - measured here, and the
    library does the same, so this is not a difference between them but a thing
-   both let through. mathparser-live met it first, from a dot picked up out of an
-   editor selection, and settled it with the rule taken here: a line counts as a
-   formula when it holds a letter or a digit. pi and 0.5 hold one; a dot, a
-   comma, a lone sign do not.
+   both let through. GraphBuilder met it first, on the 24th of August 2026: a
+   lone dot out of an editor selection reached its list of formulas and drew an
+   empty curve. The rule it settled on is taken here whole, and so is the reason
+   it is not stricter - requiring a DIGIT would refuse pi and exp, which are
+   formulas and hold none. So: a line counts as a formula when it holds a letter
+   or a digit. pi and 0.5 hold one; a dot, a comma, a lone sign do not.
    The guard stands in the page rather than in the engine on purpose. Moving it
    into the engine would part the browser from the library, and the whole worth
    of this build is that it does not part from it. */
