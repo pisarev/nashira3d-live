@@ -43,6 +43,32 @@ begin
   Result := (A = B) or (IsNan(A) and IsNan(B));
 end;
 
+{ WHAT IS ACCEPTED MUST BE THE SAME ON BOTH SIDES. A formula naming something
+  that does not exist still parses, and the interpreter left to itself evaluates
+  it to nought: zzz drew a flat plane and x+zzz lost the term that was good,
+  while the library refused all of them. Agreement about VALUES says nothing
+  about this - the two never got as far as a value. }
+procedure Accept(const Formula: string);
+var
+  In1, O1, O2, O3: array[0..0] of Double;
+  a, b, c: Boolean;
+begin
+  Inc(Total);
+  In1[0] := 1; GYj := 1; GYs := 1; GYf := 1;
+  a := PJ.ExecuteMany(Formula, GXj, In1, O1);
+  b := PS.ExecuteMany(Formula, GXs, In1, O2);
+  c := PF.ExecuteMany(Formula, GXf, In1, O3);
+  if (a = b) and (b = c) then
+    WriteLn(Format('  %-40s accepted by all three: %s',
+      [Formula, BoolToStr(a, True)]))
+  else
+  begin
+    Inc(Bad);
+    WriteLn(Format('  %-40s ACCEPTANCE DIFFERS: jit %s, interpreter %s, fast %s',
+      [Formula, BoolToStr(a, True), BoolToStr(b, True), BoolToStr(c, True)]));
+  end;
+end;
+
 procedure Check(const Formula: string; X0, X1, Y0, Y1: Double);
 var
   Xs, Zj, Zs, Zf: array[0..N - 1] of Double;
@@ -165,6 +191,32 @@ begin
     Check('hypot(x,y)', -3, 3, -3, 3);
     Check('round(x)', -3, 3, -3, 3);
     Check('factorial(3)', -3, 3, -3, 3);
+    { Names that do not exist, and a bracket left open. All must be refused,
+      and refused by all three alike. }
+    WriteLn;
+    Accept('nosuchfn(x)');
+    Accept('zzz');
+    Accept('x+zzz');
+    Accept('sim(x)');
+    Accept('sin(x');
+    Accept('x*x+y*y');
+    Accept('sin(x)*cos(y)');
+    { DEGENERATE INPUT, four species of it. The sign that a formula names
+      something absent is that the decoder yields no steps, and before trusting
+      it the other side has to be looked at: is there a LEGAL formula that also
+      yields none? Measured - the lone sign is the only input of these that
+      does, and both sides refuse it anyway. Nothing legal came out empty. }
+    Accept('');
+    Accept('   ');
+    Accept('(');
+    Accept('()');
+    Accept('+');
+    Accept('.');
+    Accept('0');
+    Accept('0.5');
+    Accept('pi');
+    Accept('x');
+    Accept('-x');
     WriteLn;
     WriteLn(Format('formulas %d, on the fast path %d, ours differing %d',
       [Total, Fast, Bad]));

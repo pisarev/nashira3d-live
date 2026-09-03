@@ -61,6 +61,14 @@ type
       node. Nil means the formula does not mention y, or that its variable is
       not a plain double. }
     FPY    : PDouble;
+    { WHETHER THE NAMES IN THE FORMULA EXIST AT ALL. A formula that names
+      something the parser does not know still parses, and the interpreter
+      then evaluates it to nought without a word - zzz draws a flat plane,
+      and x+zzz loses the term that was good. The decoder is stricter: for
+      such a formula it yields no steps at all, while the plainest legal one
+      yields at least one. That is the difference, and it is what the
+      machine-code side refuses on. }
+    FNamesOk: Boolean;
     procedure Emit(ACode: Byte; const AValue: Double);
   public
     constructor Create;
@@ -72,6 +80,10 @@ type
     function Eval(const X, Y: Double): Double;
     property Ok: Boolean read FOk;
     property PlaceOfY: PDouble read FPY;
+    { True only after Compile has read the formula. False means the formula
+      names something that does not exist, and the caller must refuse it
+      rather than draw nought. }
+    property NamesOk: Boolean read FNamesOk;
   end;
 
 var
@@ -155,6 +167,7 @@ begin
   inherited Create;
   FOk := False;
   FPY := nil;
+  FNamesOk := False;
 end;
 
 procedure TFastProgram.Emit(ACode: Byte; const AValue: Double);
@@ -363,6 +376,7 @@ begin
   FDepth := 0;
   FPeak := 0;
   FPY := nil;
+  FNamesOk := False;
   if AParser = nil then Exit;
   Script := nil;
   try
@@ -381,6 +395,11 @@ begin
     if not Decoder.Supported then Exit;
     Ops := Decoder.Ops;
     Count := Decoder.Count;
+    { NO STEPS AT ALL means a name in the formula does not exist. That is a
+      verdict about the formula rather than about this back end, so it is
+      recorded apart from the refusal: the caller must not fall back to the
+      interpreter and draw nought, it must refuse. }
+    FNamesOk := Count > 0;
     if Count <= 0 then Exit;
     Pos := 0;
     if not EmitScriptBody(False) then Exit;

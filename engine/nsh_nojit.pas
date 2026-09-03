@@ -121,7 +121,21 @@ begin
       offered to it again on every row. }
     if FFast = nil then
       FFast := TFastProgram.Create;
-    FFastOk := (not FFastOff) and FFast.Compile(Self, Expr);
+    { COMPILED ALWAYS, USED BY CHOICE. Reading the formula is what tells whether
+      its names exist at all, and that answer is needed even where the fast back
+      end is switched off - it is a verdict about the formula, not about which
+      back end does the work. }
+    FFastOk := FFast.Compile(Self, Expr) and (not FFastOff);
+    { A NAME THAT DOES NOT EXIST IS A REFUSAL, not a surface at nought. Left to
+      itself the interpreter evaluates zzz to nought and draws a flat plane, and
+      x+zzz loses the term that was good; the library refuses all four such
+      formulas with "the formula did not parse", and this build must answer the
+      same. }
+    if not FFast.NamesOk then
+    begin
+      FHave := False;
+      Exit;
+    end;
     FSeen := False;
     FRow := 0;
   end;

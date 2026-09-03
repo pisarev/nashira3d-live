@@ -1648,6 +1648,20 @@ function tiltStand(v) {
    for the same parser: a caret BETWEEN TWO VALUES is almost certainly a power
    that was meant. Standing anywhere else it is left alone - somebody who wants
    exclusive or is entitled to it, and this is a hint, not a refusal. */
+/* SOMETHING IN IT HAS TO BE ABLE TO YIELD A VALUE. A lone dot parses, builds a
+   mesh and draws a flat plane at nought without a word - measured here, and the
+   library does the same, so this is not a difference between them but a thing
+   both let through. mathparser-live met it first, from a dot picked up out of an
+   editor selection, and settled it with the rule taken here: a line counts as a
+   formula when it holds a letter or a digit. pi and 0.5 hold one; a dot, a
+   comma, a lone sign do not.
+   The guard stands in the page rather than in the engine on purpose. Moving it
+   into the engine would part the browser from the library, and the whole worth
+   of this build is that it does not part from it. */
+function plottable(s) {
+  return /[\p{L}\p{N}]/u.test(String(s || ""));
+}
+
 function caretNote() {
   return /[\w.)]\s*\^\s*[\w.(]/.test($("f").value)
     ? "^ is exclusive or here, not a power - write x ** 2"
@@ -1670,6 +1684,12 @@ async function coreFetch() {
        touch it: a rebuild at 136 nodes a side costs about 180 ms, a redraw a
        few. */
     const f = $("f").value;
+    if (!plottable(f)) {
+      errBox.textContent =
+        "a formula needs something that can yield a value - a letter or a digit";
+      errBox.classList.remove("hint");
+      return;
+    }
     const q = parseInt($("q").value, 10);
     const plane = (drawIn === "plane");
     /* A NEW FORMULA IS A NEW SCALE, once. Everything else - a region, a camera,
