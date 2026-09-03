@@ -279,6 +279,18 @@ export function createRenderer(gl) {
           t = min(t, (by - o.y) / dir.y);
         }
         float r = max(t - 1.0, 0.0);
+        /* THE 1.5 IS NOT A KNOB, and it was not chosen by eye. t says how many
+           times further than this point the ray leaves the rectangle of the
+           mesh, so r = t - 1 is the path still to go measured in what has
+           already been walked, and at the boundary r is nought and the colour
+           becomes the background EXACTLY, whatever the direction. The older
+           dissolve ran by reciprocal distance from 0.4 of the limit to the
+           limit, which in these same units is exactly r from 1.5 down to 0, so
+           where the boundary sat at the limit this reproduces it exactly.
+           By reciprocal distance rather than distance because the library
+           measured the other way: on a shallow view an even dissolve by
+           distance took TWO ROWS of a frame of two hundred and twenty, which is
+           to say it was not visible at all. */
         float u = clamp(1.0 - r / 1.5, 0.0, 1.0);
         /* A smoothed step, not u*u: its derivative is zero at BOTH ends, and
            the ledge it leaves stays below one level of brightness out of
