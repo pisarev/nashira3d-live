@@ -2617,6 +2617,10 @@ const SAMPLES = [
     f:"sin(14*sqrt((x-0.4)**2+y**2))+sin(14*sqrt((x+0.4)**2+y**2))" },
   { n:"pulsar",        g:"waves",  z:0.3,  d:[-1,1,-1,1],
     f:"sin(18*sqrt(x**2+y**2)+5*arctan2(y,x))/(1+3*sqrt(x**2+y**2))" },
+  { n:"endless waves", g:"waves",  z:0.3,  d:[-6,6,-6,6],
+    f:"sin(x)*cos(y)" },
+  { n:"ridges",        g:"waves",  z:0.3,  d:[-6,6,-6,6],
+    f:"cos(x)+cos(y)" },
 
   { n:"volcanic ring", g:"relief", z:0.4,  d:[-1,1,-1,1],
     f:"exp(-20*(sqrt(x**2+y**2)-0.55)**2)-exp(-30*(x**2+y**2))" },
@@ -2624,6 +2628,12 @@ const SAMPLES = [
     f:"exp(-2*(x**2+y**2))*sin(8*arctan2(y,x))" },
   { n:"dome lattice",  g:"relief", z:0.3,  d:[-1,1,-1,1],
     f:"cos(6*x)*cos(6*y)/(1+x**2+y**2)" },
+  { n:"peak",          g:"relief", z:0.35, d:[-1,1,-1,1],
+    f:"exp(-40*((x-0.137)**2+y*y))" },
+  { n:"dipole",        g:"relief", z:0.35, d:[-1,1,-1,1],
+    f:"exp(-8*((x-0.4)**2+y*y))-exp(-8*((x+0.4)**2+y*y))" },
+  { n:"wall",          g:"relief", z:0.3,  d:[-1,1,-1,1],
+    f:"cos(3*y)/cosh(4*x)" },
 
   { n:"dunes",         g:"fields", z:0.3,  d:[-1,1,-1,1],
     f:"sin(8*x+3*sin(5*y))*cos(7*y+2*sin(4*x))" },
@@ -2638,6 +2648,8 @@ const SAMPLES = [
     f:"x**3-3*x*y*y" },
   { n:"bowl",          g:"forms",  z:0.3,  d:[-1,1,-1,1],
     f:"x*x+y*y" },
+  { n:"crease",        g:"forms",  z:0.3,  d:[-1,1,-1,1],
+    f:"abs(x)-abs(y)" },
 
   { n:"holes",         g:"edges",  z:0.3,  d:[-1,1,-1,1],
     f:"sqrt(x*x+y*y-0.5)" },
