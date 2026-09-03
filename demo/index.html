@@ -229,6 +229,10 @@ window.__nshModsReady({ createRenderer, loadEngine });
     font-family:ui-monospace,Consolas,monospace;
     font-variant-numeric:tabular-nums;color:var(--ink)}
 
+  /* THE HINT IS NOT AN ERROR and must not wear its colour. The formula is
+     lawful; it simply does not mean what the person meant. Red would say the
+     picture is broken, and the picture is fine - it is the wrong picture. */
+  #err.hint{color:var(--dim)}
   #err{color:var(--bad);font-size:11.5px;min-height:16px;margin-top:7px;
     font-family:ui-monospace,Consolas,monospace;overflow-wrap:break-word;
     text-align:justify}
@@ -1633,6 +1637,23 @@ function tiltStand(v) {
 }
 
 
+/* THE CARET IS NOT A POWER. In this parser `^` is bitwise exclusive or, and a
+   formula that uses it is lawful: it parses, it evaluates, it draws. It simply
+   draws something else. A preset of ours spent three days as x^3-3*x*y*y, which
+   is not a monkey saddle but three flat terraces from the xor with -3xy^2
+   tilting them; at x=3, y=2 that is -36 where the saddle is -9.
+   A gate now keeps carets out of OUR presets. It does nothing for a visitor who
+   types x^2 meaning a square, so the page says it where they typed it.
+   The condition is taken from mathparser-live, which warns about the same trap
+   for the same parser: a caret BETWEEN TWO VALUES is almost certainly a power
+   that was meant. Standing anywhere else it is left alone - somebody who wants
+   exclusive or is entitled to it, and this is a hint, not a refusal. */
+function caretNote() {
+  return /[\w.)]\s*\^\s*[\w.(]/.test($("f").value)
+    ? "^ is exclusive or here, not a power - write x ** 2"
+    : "";
+}
+
 async function coreFetch() {
   /* A pinned size belongs to the gate: a comparison of frames is only worth
      something when both sides drew the same number of pixels. Nothing a person
@@ -1690,7 +1711,7 @@ async function coreFetch() {
          twelve units of sheet span 2.00, and every contour line moved. */
       if (!zFreeze && plane) {
         const z = E.build(f, declDom[0], declDom[1], declDom[2], declDom[3], q);
-        if (z.error) { errBox.textContent = z.error; return; }
+        if (z.error) { errBox.textContent = z.error; errBox.classList.remove("hint"); return; }
         zFreeze = [(z.info[0] + z.info[1]) / 2, z.info[1] - z.info[0]];
         zArmed = true;
       }
@@ -1701,7 +1722,7 @@ async function coreFetch() {
                     axisLines(useDom[2], useDom[3],
                               (useDom[0] + useDom[1]) / 2, false, nodes))
         : E.build(f, useDom[0], useDom[1], useDom[2], useDom[3], q);
-      if (m.error) { errBox.textContent = m.error; return; }
+      if (m.error) { errBox.textContent = m.error; errBox.classList.remove("hint"); return; }
       if (!zFreeze) {
         zFreeze = [(m.info[0] + m.info[1]) / 2, m.info[1] - m.info[0]];
         zArmed = true;
@@ -1733,7 +1754,10 @@ async function coreFetch() {
       meshMs = m.ms;
       $("sv").textContent = m.info[2];
     }
-    errBox.textContent = "";
+    /* An error wins over a hint: the branches above set the box and leave, so
+       reaching here means the mesh was built and only the hint can apply. */
+    errBox.textContent = caretNote();
+    errBox.classList.toggle("hint", errBox.textContent !== "");
 
     /* The camera stands at a point rather than orbiting a centre, and its
        coordinates are in the units of the domain, so they are brought into the
@@ -1795,6 +1819,7 @@ async function coreFetch() {
     paintMotionNote();
   } catch (e) {
     errBox.textContent = "the frame was not drawn: " + String((e && e.message) || e);
+    errBox.classList.remove("hint");
   } finally { coreBusy = false; }
 }
 
