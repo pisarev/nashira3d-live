@@ -108,6 +108,33 @@ SHOTS = [
 ]
 
 
+CARD_W, CARD_H = 1200, 630
+
+
+def link_card(drawing):
+    """The picture a link to this page shows when it is shared.
+
+    The size is not a matter of taste: 1200 by 630 is the frame the networks
+    display whole, and anything else they crop. The drawings on this page are
+    cut to the silhouette, so their size comes out as it comes out - hero is
+    991 by 552 - which is why the card is COMPOSED rather than reused: the
+    drawing is placed on a sheet of the required size with room around it.
+
+    The same drawing as the top of the page, and deliberately so: a card that
+    shows something other than what waits behind the link is a small lie told
+    at the moment a person decides whether to click.
+    """
+    from PIL import Image as PILImage
+    card = PILImage.new("RGB", (CARD_W, CARD_H), tuple(int(v) for v in PAPER))
+    pad = 40
+    box = (CARD_W - 2 * pad, CARD_H - 2 * pad)
+    scale = min(box[0] / drawing.width, box[1] / drawing.height)
+    size = (max(1, int(drawing.width * scale)), max(1, int(drawing.height * scale)))
+    fit = drawing.resize(size, PILImage.LANCZOS)
+    card.paste(fit, ((CARD_W - size[0]) // 2, (CARD_H - size[1]) // 2))
+    return card
+
+
 def main():
     if not os.path.isdir(OUT):
         os.makedirs(OUT)
@@ -118,6 +145,12 @@ def main():
         im.convert("P", palette=Image.ADAPTIVE, colors=64).save(p, optimize=True)
         print("  %-8s %4dx%-4d %7d bytes  %s"
               % (name, im.width, im.height, os.path.getsize(p), f))
+        if name == "hero":
+            card = link_card(im)
+            q = os.path.join(OUT, "card.png")
+            card.convert("P", palette=Image.ADAPTIVE, colors=64).save(q, optimize=True)
+            print("  %-8s %4dx%-4d %7d bytes  the same drawing, on a fixed sheet"
+                  % ("card", card.width, card.height, os.path.getsize(q)))
 
 
 if __name__ == "__main__":
