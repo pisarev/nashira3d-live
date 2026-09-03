@@ -280,12 +280,12 @@ window.__nshModsReady({ createRenderer, loadEngine });
   #modetip.on{opacity:1}
   #modetip.pan{color:var(--acc);border-color:var(--acc-dim)}
 
-  /* THE GALLERY OF PRESETS. Twenty buttons with names are a list, not a choice:
+  /* THE GALLERY OF PRESETS. A wall of buttons with names is a list, not a choice:
      a name does not answer "what is this" and a picture answers at once.
 
      The thumbnails are grey and drawn in lines, like drafting sheets. Coloured
-     ones argued with each other: eighteen differently coloured cells side by
-     side read as stained glass, while eighteen grey ones add up to a single
+     ones argued with each other: differently coloured cells side by
+     side read as stained glass, while grey ones add up to a single
      sheet and the eye compares SHAPES. The whole finish follows from that: a
      thin frame, a monospaced formula, a muted ground. Colour is left to exactly
      one thing - the chosen cell. */
@@ -579,7 +579,7 @@ window.__nshModsReady({ createRenderer, loadEngine });
   <div class="card" role="dialog" aria-modal="true" aria-label="Sample formulas">
     <div class="head">
       <div>
-        <b>Eighteen surfaces to start from</b>
+        <b id="galTitle">Surfaces to start from</b>
         <span>Every plate below is drawn by the library itself, from the formula
           printed under it, in contour lines. Pick one and it lands in the
           field, with the domain and the box height that suit it.</span>
@@ -2581,8 +2581,8 @@ $("bfitz").onclick = () => {
 /* The presets are written IN THE LIBRARY'S DIALECT, not in the one usual for C
    and JS: arctan, arcsin, lg, x mod 2. There is no other dialect here any
    more. */
-/* THE PRESETS. One button per formula does not scale: there are twenty of them
-   now, and twenty buttons in a panel are no longer a choice but a list. The
+/* THE PRESETS. One button per formula does not scale: a panel full of
+   buttons is no longer a choice but a list. The
    presets are gathered into a gallery, and the gallery shows not names but THE
    SURFACES THEMSELVES, drawn by the same core. A picture answers the question
    "what is this", which a name does not.
@@ -2696,7 +2696,8 @@ function syncPicks() {
   }
   $("picknow").textContent = name
     ? "Showing " + name + "."
-    : "Your own formula. The gallery has eighteen to start from.";
+    : "Your own formula. The gallery has " + SAMPLES.length
+        + " to start from.";
 }
 
 function applySample(item) {
@@ -2718,6 +2719,13 @@ function applySample(item) {
 (function buildGallery() {
   const grid = $("galGrid");
   if (!grid) return;
+  /* THE COUNT COMES FROM THE LIST. On 03.09.2026 the heading still said
+     eighteen while the gallery held twenty-four, and it had been published that
+     way: the number was spelled out, so nothing looking for digits saw it, and
+     no check read this page at all. The markup keeps a heading with no number
+     in it, so a page whose script never ran says nothing false either. */
+  const title = $("galTitle");
+  if (title) title.textContent = SAMPLES.length + " surfaces to start from";
   let first = true;
   for (const [key, title] of SAMPLE_FAMILIES) {
     const mine = SAMPLES.filter((it) => it.g === key);
@@ -2780,7 +2788,7 @@ $("gallery").addEventListener("pointerdown", (e) => {
 });
 
 /* Walking the cells with the arrows. Tab walks them by itself - they are
-   buttons - but eighteen cells in three rows are a grid, and a grid is walked
+   buttons - but the cells stand in rows, and a grid is walked, and a grid is walked
    with arrows: up and down step by a row, not by one. */
 $("galGrid").addEventListener("keydown", (e) => {
   const cells = [...$("galGrid").querySelectorAll(".pick")];
